@@ -539,14 +539,14 @@ feat(base): 建立模组骨架与世界运行时硬门
 坐标统一使用“相对世界中心的 Tile 坐标”，运行时通过唯一坐标转换器乘 `TILE_SCALE`。配置、日志和 Debug 输出都同时标记单位，禁止把 Tile 坐标直接传给世界坐标 API。
 
 ```lua
-world_size_tiles = { width = 400, height = 400 }
+world_size_tiles = { width = 401, height = 401 }
 coordinate_unit = "TILE_FROM_WORLD_CENTER"
 
 lobby = {
     center = { x = 0, z = 0 },
-    safe_size = { width = 14, height = 14 },
-    build_size = { width = 16, height = 16 },
-    hard_size = { width = 20, height = 20 },
+    safe_size = { width = 13, height = 13 },
+    build_size = { width = 15, height = 15 },
+    hard_size = { width = 19, height = 19 },
     portal_prefab = "multiplayer_portal",
 }
 ```
@@ -555,9 +555,11 @@ Zone 共 10 个。类别只表示物理尺寸，不表示玩法：
 
 | 类别 | 数量 | `safe_bounds` | `build_bounds` | `hard_bounds` | 中心 `(x, z)` |
 | --- | ---: | ---: | ---: | ---: | --- |
-| SMALL | 4 | 11×11 | 13×13 | 17×17 | `(-155,50)`、`(155,50)`、`(-155,-50)`、`(155,-50)` |
-| MEDIUM | 4 | 28×28 | 30×30 | 34×34 | `(-105,50)`、`(105,50)`、`(-105,-50)`、`(105,-50)` |
-| LARGE | 2 | 120×60 | 122×62 | 126×66 | `(0,115)`、`(0,-115)` |
+| SMALL | 4 | 11×11 | 13×13 | 17×17 | `(-155,65)`、`(155,65)`、`(-155,-65)`、`(155,-65)` |
+| MEDIUM | 4 | 29×29 | 31×31 | 35×35 | `(-105,65)`、`(105,65)`、`(-105,-65)`、`(105,-65)` |
+| LARGE | 2 | 121×61 | 123×63 | 127×67 | `(0,130)`、`(0,-130)` |
+
+Lobby 和 Portal 重新核算后仍固定在世界原点 `(0,0)`。401×401 地图边界为 `±200.5` Tile。Zone 使用上表重新计算后的中心：最外侧 SMALL 的 x 硬边缘与 LARGE 的 z 硬边缘都位于 `±163.5` Tile，地图两轴均保留 37 Tile 边距；相邻 SMALL/MEDIUM 的硬边缘间距为 24 Tile。
 
 LARGE 固定横向，即宽度沿 x 轴、高度沿 z 轴。Zone ID 按表顺序固定为 `small_01..04`、`medium_01..04`、`large_01..02`。三层矩形都以 Zone center 为几何中心，并满足：
 
@@ -565,17 +567,19 @@ LARGE 固定横向，即宽度沿 x 轴、高度沿 z 轴。Zone ID 按表顺序
 safe_bounds ⊂ build_bounds ⊂ hard_bounds
 ```
 
-按轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离至少为 24 Tile，任意 `hard_bounds` 到地图边缘至少为 36 Tile；上述正式布局的实际最小值分别为 24.5 与 36.5 Tile。Validator 必须按几何边缘计算，而不是只比较中心距。
+Lobby 与所有 Zone 的三层宽高均为奇数；每个 center 必须落在唯一中心 Tile 上，边界相对该 Tile 四向严格对称，不允许半 Tile 中心或单侧多一格。
+
+按轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离至少为 24 Tile，任意 `hard_bounds` 到地图边缘至少为 36 Tile；上述正式布局的实际最小值分别为 24 与 37 Tile。Validator 必须按几何边缘计算，而不是只比较中心距。
 
 - `safe_bounds`：当前场景允许玩家正常活动的区域；
 - `build_bounds`：ScenePlan 可以铺地和布置场景的区域；
 - `hard_bounds`：地形事务、实体生成、回滚、扫描和最终清理的绝对边界。
 
-大厅固定使用 `MAXWELL_RITUAL_HALL_V1` 16×16 Tile 图案，按下列优先级执行，后者覆盖前者：
+大厅固定使用 `MAXWELL_RITUAL_HALL_V1` 15×15 Tile 图案，按下列优先级执行，后者覆盖前者：
 
-1. 16×16 基底：`WORLD_TILES.CARPET2`；
-2. 从中心通向四边的 2 Tile 宽十字通道：`WORLD_TILES.WOODFLOOR`；
-3. 中央 6×6：`WORLD_TILES.CHECKER`；
+1. 15×15 基底：`WORLD_TILES.CARPET2`；
+2. 从唯一中心 Tile 通向四边的 3 Tile 宽十字通道：`WORLD_TILES.WOODFLOOR`；
+3. 中央 5×5：`WORLD_TILES.CHECKER`；
 4. 最外侧 1 Tile 环：`WORLD_TILES.BRICK_GLOW`。
 
 `multiplayer_portal` 的中心固定为 `(0,0)`。大厅出生点和通用返回点共用以下相对中心的有序候选：
@@ -600,9 +604,9 @@ scripts/components/agon_runtime.lua
 ### 实施步骤
 
 1. 把上述正式值写入可序列化 `WorldLayoutDefinition`，初始 `layout_version = 1`；不得另建 DEV Layout 取代正式配置。
-2. 实现唯一的 Tile/world 坐标转换器和中心矩形构造器；对偶数尺寸特别验证宽、高和中心，防止 off-by-one 或半 Tile 漂移。
+2. 实现唯一的 Tile/world 坐标转换器和奇数尺寸中心矩形构造器；验证 center 对应唯一中心 Tile、实际宽高与四向对称边界，防止 off-by-one。
 3. 实现启动前静态验证：世界尺寸、坐标单位、三层 bounds 包含关系、24 Tile Zone 间距、36 Tile 地图边距、zone_id 唯一、类别与尺寸匹配、大厅点位位于 `safe_bounds`。
-4. 查询 `lavaarena`、`quagmire` 地图任务及官方 layout API，使用 400×400 Tile 世界生成纯虚空地图并放置 Portal。
+4. 查询 `lavaarena`、`quagmire` 地图任务及官方 layout API，使用 401×401 Tile 世界生成纯虚空地图并放置 Portal。
 5. `modworldgenmain.lua` 使用同一个 `enable_agon` 开关；关闭时不改变其他 shard worldgen。
 6. 首次生成大厅 Tile 图案和唯一 `multiplayer_portal`，不生成 Zone 地面或玩法实体。
 7. world runtime 启动后查找 Portal，校验 Prefab、唯一性和与 `(0,0)` 的误差。
@@ -624,7 +628,7 @@ scripts/components/agon_runtime.lua
 
 - `enable_agon = false` 的 shard 地图生成不受影响。
 - Agon shard 只有大厅为陆地，其余均为 IMPASSABLE，不是海洋。
-- 大厅四种 Tile 的范围、覆盖优先级和 16×16 尺寸逐 Tile 正确。
+- 大厅四种 Tile 的范围、覆盖优先级和 15×15 尺寸逐 Tile 正确；中央 5×5、3 Tile 宽通道和外环都相对唯一中心 Tile 对称。
 - Portal 唯一、Prefab 为 `multiplayer_portal` 且中心为 `(0,0)`。
 - 10 个 Zone 的类别、中心和三层尺寸与上表一致；所有 `hard_bounds` 落在地图内且初始无地面。
 - 大厅候选点均在安全地面；占用回退搜索不会越过 `safe_bounds`。

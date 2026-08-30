@@ -137,14 +137,14 @@ The Agon 使用专门的世界生成方案：
 ```lua
 WorldLayoutDefinition = {
     layout_version = 1,
-    world_size_tiles = { width = 400, height = 400 },
+    world_size_tiles = { width = 401, height = 401 },
     coordinate_unit = "TILE_FROM_WORLD_CENTER",
 
     lobby = {
         center = { x = 0, z = 0 },
-        safe_size = { width = 14, height = 14 },
-        build_size = { width = 16, height = 16 },
-        hard_size = { width = 20, height = 20 },
+        safe_size = { width = 13, height = 13 },
+        build_size = { width = 15, height = 15 },
+        hard_size = { width = 19, height = 19 },
         portal_prefab = "multiplayer_portal",
         spawn_and_return_points = {
             { x = 3, z = 0 }, { x = -3, z = 0 },
@@ -162,33 +162,33 @@ WorldLayoutDefinition = {
             hard_size = { width = 17, height = 17 },
         },
         MEDIUM = {
-            safe_size = { width = 28, height = 28 },
-            build_size = { width = 30, height = 30 },
-            hard_size = { width = 34, height = 34 },
+            safe_size = { width = 29, height = 29 },
+            build_size = { width = 31, height = 31 },
+            hard_size = { width = 35, height = 35 },
         },
         LARGE = {
-            safe_size = { width = 120, height = 60 },
-            build_size = { width = 122, height = 62 },
-            hard_size = { width = 126, height = 66 },
+            safe_size = { width = 121, height = 61 },
+            build_size = { width = 123, height = 63 },
+            hard_size = { width = 127, height = 67 },
         },
     },
 
     zones = {
-        -- SMALL: safe 11x11, build 13x13, hard 17x17
-        { zone_id = "small_01", zone_category = "SMALL", center = { x = -155, z =  50 } },
-        { zone_id = "small_02", zone_category = "SMALL", center = { x =  155, z =  50 } },
-        { zone_id = "small_03", zone_category = "SMALL", center = { x = -155, z = -50 } },
-        { zone_id = "small_04", zone_category = "SMALL", center = { x =  155, z = -50 } },
+        -- SMALL：安全 11x11，构建 13x13，硬边界 17x17
+        { zone_id = "small_01", zone_category = "SMALL", center = { x = -155, z =  65 } },
+        { zone_id = "small_02", zone_category = "SMALL", center = { x =  155, z =  65 } },
+        { zone_id = "small_03", zone_category = "SMALL", center = { x = -155, z = -65 } },
+        { zone_id = "small_04", zone_category = "SMALL", center = { x =  155, z = -65 } },
 
-        -- MEDIUM: safe 28x28, build 30x30, hard 34x34
-        { zone_id = "medium_01", zone_category = "MEDIUM", center = { x = -105, z =  50 } },
-        { zone_id = "medium_02", zone_category = "MEDIUM", center = { x =  105, z =  50 } },
-        { zone_id = "medium_03", zone_category = "MEDIUM", center = { x = -105, z = -50 } },
-        { zone_id = "medium_04", zone_category = "MEDIUM", center = { x =  105, z = -50 } },
+        -- MEDIUM：安全 29x29，构建 31x31，硬边界 35x35
+        { zone_id = "medium_01", zone_category = "MEDIUM", center = { x = -105, z =  65 } },
+        { zone_id = "medium_02", zone_category = "MEDIUM", center = { x =  105, z =  65 } },
+        { zone_id = "medium_03", zone_category = "MEDIUM", center = { x = -105, z = -65 } },
+        { zone_id = "medium_04", zone_category = "MEDIUM", center = { x =  105, z = -65 } },
 
-        -- LARGE 横向: safe 120x60, build 122x62, hard 126x66
-        { zone_id = "large_01", zone_category = "LARGE", center = { x = 0, z =  115 } },
-        { zone_id = "large_02", zone_category = "LARGE", center = { x = 0, z = -115 } },
+        -- LARGE 横向：安全 121x61，构建 123x63，硬边界 127x67
+        { zone_id = "large_01", zone_category = "LARGE", center = { x = 0, z =  130 } },
+        { zone_id = "large_02", zone_category = "LARGE", center = { x = 0, z = -130 } },
     },
 }
 ```
@@ -202,16 +202,18 @@ WorldLayoutDefinition = {
 - `build_bounds` 是 ScenePlan 可以铺地和布置场景的区域；
 - `hard_bounds` 是任何地形事务、实体生成、回滚和清理都不得越过的绝对边界；
 - 三层边界必须满足 `safe_bounds ⊂ build_bounds ⊂ hard_bounds`，并由类别尺寸和 Zone 中心计算，不在每个 Zone 重复手写；
+- Lobby 与所有 Zone 的三层宽高均为奇数，center 必须落在唯一中心 Tile 上；每层边界相对中心 Tile 四向严格对称，不允许半 Tile 中心或单侧多一格；
 - 所有 LARGE Zone 固定为横向，宽度沿 x 轴、高度沿 z 轴。
-- 以轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离不得小于 24 Tile；任意 `hard_bounds` 到地图边缘的距离不得小于 36 Tile。正式坐标的实际最小值分别为 24.5 和 36.5 Tile。
+- Lobby 与 Portal 重新核算后仍以世界原点 `(0, 0)` 为中心；Zone 中心使用上表正式值。401×401 地图边界为 `±200.5` Tile，最外侧 SMALL 的 x 硬边缘和 LARGE 的 z 硬边缘都对齐到 `±163.5` Tile，使地图两轴均保留 37 Tile 边距；相邻 SMALL/MEDIUM 的硬边缘间距为 24 Tile。
+- 以轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离不得小于 24 Tile；任意 `hard_bounds` 到地图边缘的距离不得小于 36 Tile。正式坐标的实际最小值分别为 24 和 37 Tile。
 
 Zone 不设置能力标签集合，也不保存固定 Participant 出生点、spectator anchor 或 camera bounds。每个 ScenePlan revision 必须根据当时实际地形声明这些动态锚点；SceneService 在提交场景前验证它们位于有效地面和对应边界内。WorldLayout 只提供 Zone 中心和三层物理边界。锚点变更失败时保留最后一个已提交 revision；若不存在可用的已提交锚点，则中止 Instance 并把 Participant/Spectator 安全送回大厅，绝不把 Zone 中心当作落点，因为空闲 Zone 中心是虚空。
 
-大厅的 `MAXWELL_RITUAL_HALL_V1` 是固定 16×16 Tile 对称图案，按以下顺序铺设，后写层覆盖先写层：
+大厅的 `MAXWELL_RITUAL_HALL_V1` 是固定 15×15 Tile 对称图案，按以下顺序铺设，后写层覆盖先写层：
 
-1. 全部 16×16 使用 `WORLD_TILES.CARPET2`；
-2. 从中心向四边铺设 2 Tile 宽的十字通道，使用 `WORLD_TILES.WOODFLOOR`；
-3. 中央 6×6 使用 `WORLD_TILES.CHECKER`；
+1. 全部 15×15 使用 `WORLD_TILES.CARPET2`；
+2. 从唯一中心 Tile 向四边铺设 3 Tile 宽的十字通道，使用 `WORLD_TILES.WOODFLOOR`；
+3. 中央 5×5 使用 `WORLD_TILES.CHECKER`；
 4. 最外侧 1 Tile 环使用 `WORLD_TILES.BRICK_GLOW`。
 
 `multiplayer_portal` 位于 `(0, 0)`。大厅出生/返回点按配置顺序循环选择可用点；点位被占用或不安全时，只能在 `safe_bounds` 内做有界最近安全点搜索，绝不能把玩家放入虚空。Spectator 退出时优先返回其大厅残影位置，失效时再使用该回退列表。
