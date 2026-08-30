@@ -132,19 +132,19 @@ The Agon 使用专门的世界生成方案：
 
 ### 3.2 Layout 配置
 
-正式静态定义使用以世界中心为原点的 Tile 坐标；运行时世界坐标由统一转换器乘 `TILE_SCALE`，Mode 和 Service 不得各自换算：
+正式静态定义使用“相对 Portal 实际 Tile 的偏移坐标”。世界生成不假设地图中心的世界坐标是 `(0, 0)`；运行时先读取唯一 Portal 的实际 Tile 坐标，再解析 Lobby 和所有 Zone 的实际中心。世界坐标由统一转换器使用 `TILE_SCALE` 转换，Mode 和 Service 不得各自换算：
 
 ```lua
 WorldLayoutDefinition = {
     layout_version = 1,
-    world_size_tiles = { width = 401, height = 401 },
-    coordinate_unit = "TILE_FROM_WORLD_CENTER",
+    world_size_tiles = { width = 400, height = 400 },
+    coordinate_unit = "TILE_OFFSET_FROM_PORTAL",
 
     lobby = {
-        center = { x = 0, z = 0 },
-        safe_size = { width = 13, height = 13 },
-        build_size = { width = 15, height = 15 },
-        hard_size = { width = 19, height = 19 },
+        center_offset = { x = 0, z = 0 },
+        safe_size = { width = 9, height = 9 },
+        build_size = { width = 11, height = 11 },
+        hard_size = { width = 15, height = 15 },
         portal_prefab = "multiplayer_portal",
         spawn_and_return_points = {
             { x = 3, z = 0 }, { x = -3, z = 0 },
@@ -175,20 +175,20 @@ WorldLayoutDefinition = {
 
     zones = {
         -- SMALL：安全 11x11，构建 13x13，硬边界 17x17
-        { zone_id = "small_01", zone_category = "SMALL", center = { x = -155, z =  65 } },
-        { zone_id = "small_02", zone_category = "SMALL", center = { x =  155, z =  65 } },
-        { zone_id = "small_03", zone_category = "SMALL", center = { x = -155, z = -65 } },
-        { zone_id = "small_04", zone_category = "SMALL", center = { x =  155, z = -65 } },
+        { zone_id = "small_01", zone_category = "SMALL", center_offset = { x = -155, z =  65 } },
+        { zone_id = "small_02", zone_category = "SMALL", center_offset = { x =  155, z =  65 } },
+        { zone_id = "small_03", zone_category = "SMALL", center_offset = { x = -155, z = -65 } },
+        { zone_id = "small_04", zone_category = "SMALL", center_offset = { x =  155, z = -65 } },
 
         -- MEDIUM：安全 29x29，构建 31x31，硬边界 35x35
-        { zone_id = "medium_01", zone_category = "MEDIUM", center = { x = -105, z =  65 } },
-        { zone_id = "medium_02", zone_category = "MEDIUM", center = { x =  105, z =  65 } },
-        { zone_id = "medium_03", zone_category = "MEDIUM", center = { x = -105, z = -65 } },
-        { zone_id = "medium_04", zone_category = "MEDIUM", center = { x =  105, z = -65 } },
+        { zone_id = "medium_01", zone_category = "MEDIUM", center_offset = { x = -105, z =  65 } },
+        { zone_id = "medium_02", zone_category = "MEDIUM", center_offset = { x =  105, z =  65 } },
+        { zone_id = "medium_03", zone_category = "MEDIUM", center_offset = { x = -105, z = -65 } },
+        { zone_id = "medium_04", zone_category = "MEDIUM", center_offset = { x =  105, z = -65 } },
 
         -- LARGE 横向：安全 121x61，构建 123x63，硬边界 127x67
-        { zone_id = "large_01", zone_category = "LARGE", center = { x = 0, z =  130 } },
-        { zone_id = "large_02", zone_category = "LARGE", center = { x = 0, z = -130 } },
+        { zone_id = "large_01", zone_category = "LARGE", center_offset = { x = 0, z =  130 } },
+        { zone_id = "large_02", zone_category = "LARGE", center_offset = { x = 0, z = -130 } },
     },
 }
 ```
@@ -201,36 +201,37 @@ WorldLayoutDefinition = {
 - `safe_bounds` 是当前场景允许玩家正常活动的区域；
 - `build_bounds` 是 ScenePlan 可以铺地和布置场景的区域；
 - `hard_bounds` 是任何地形事务、实体生成、回滚和清理都不得越过的绝对边界；
-- 三层边界必须满足 `safe_bounds ⊂ build_bounds ⊂ hard_bounds`，并由类别尺寸和 Zone 中心计算，不在每个 Zone 重复手写；
+- 三层边界必须满足 `safe_bounds ⊂ build_bounds ⊂ hard_bounds`，并由类别尺寸和解析后的 Zone 中心计算，不在每个 Zone 重复手写；
 - Lobby 与所有 Zone 的三层宽高均为奇数，center 必须落在唯一中心 Tile 上；每层边界相对中心 Tile 四向严格对称，不允许半 Tile 中心或单侧多一格；
 - 所有 LARGE Zone 固定为横向，宽度沿 x 轴、高度沿 z 轴。
-- Lobby 与 Portal 重新核算后仍以世界原点 `(0, 0)` 为中心；Zone 中心使用上表正式值。401×401 地图边界为 `±200.5` Tile，最外侧 SMALL 的 x 硬边缘和 LARGE 的 z 硬边缘都对齐到 `±163.5` Tile，使地图两轴均保留 37 Tile 边距；相邻 SMALL/MEDIUM 的硬边缘间距为 24 Tile。
-- 以轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离不得小于 24 Tile；任意 `hard_bounds` 到地图边缘的距离不得小于 36 Tile。正式坐标的实际最小值分别为 24 和 37 Tile。
+- Lobby center 与 Portal 实际 Tile 完全一致，二者不要求位于世界坐标 `(0, 0)`。Zone 的 `center_offset` 使用上表正式值；最外侧布局相对 Portal 的最大硬边缘偏移为 `±163.5` Tile，相邻 SMALL/MEDIUM 的硬边缘间距为 24 Tile。
+- 以轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离不得小于 24 Tile；解析后的任意 `hard_bounds` 到实际地图有效 Tile 边界不得小于 36 Tile。当前布局相对 Portal 的最大硬边缘偏移为 163.5 Tile，因此 Portal Tile 到地图四侧有效边界都必须至少有 `163.5 + 36 = 199.5` Tile 空间。Portal 必须由 worldgen 放在满足该条件的地图中央附近合法 Tile；不能根据世界坐标 `(0, 0)` 推断位置，也不能在未解析 Portal 坐标前宣称边距有效。
 
-Zone 不设置能力标签集合，也不保存固定 Participant 出生点、spectator anchor 或 camera bounds。每个 ScenePlan revision 必须根据当时实际地形声明这些动态锚点；SceneService 在提交场景前验证它们位于有效地面和对应边界内。WorldLayout 只提供 Zone 中心和三层物理边界。锚点变更失败时保留最后一个已提交 revision；若不存在可用的已提交锚点，则中止 Instance 并把 Participant/Spectator 安全送回大厅，绝不把 Zone 中心当作落点，因为空闲 Zone 中心是虚空。
+Zone 不设置能力标签集合，也不保存固定 Participant 出生点、spectator anchor 或 camera bounds。每个 ScenePlan revision 必须根据当时实际地形声明这些动态锚点；SceneService 在提交场景前验证它们位于有效地面和对应边界内。WorldLayout 静态配置只提供 Zone 中心偏移和三层物理尺寸，运行时再解析实际中心与边界。锚点变更失败时保留最后一个已提交 revision；若不存在可用的已提交锚点，则中止 Instance 并把 Participant/Spectator 安全送回大厅，绝不把 Zone 中心当作落点，因为空闲 Zone 中心是虚空。
 
-大厅的 `MAXWELL_RITUAL_HALL_V1` 是固定 15×15 Tile 对称图案，按以下顺序铺设，后写层覆盖先写层：
+大厅的 `MAXWELL_RITUAL_HALL_V1` 是以 Portal 实际 Tile 为中心的固定 11×11 Tile 对称图案，按以下顺序铺设，后写层覆盖先写层：
 
-1. 全部 15×15 使用 `WORLD_TILES.CARPET2`；
+1. 全部 11×11 使用 `WORLD_TILES.CARPET2`；
 2. 从唯一中心 Tile 向四边铺设 3 Tile 宽的十字通道，使用 `WORLD_TILES.WOODFLOOR`；
 3. 中央 5×5 使用 `WORLD_TILES.CHECKER`；
 4. 最外侧 1 Tile 环使用 `WORLD_TILES.BRICK_GLOW`。
 
-`multiplayer_portal` 位于 `(0, 0)`。大厅出生/返回点按配置顺序循环选择可用点；点位被占用或不安全时，只能在 `safe_bounds` 内做有界最近安全点搜索，绝不能把玩家放入虚空。Spectator 退出时优先返回其大厅残影位置，失效时再使用该回退列表。
+`multiplayer_portal` 位于大厅唯一中心 Tile；其实际 Tile 坐标是整个 Layout 的运行时锚点。大厅出生/返回点是相对 Portal 的 Tile 偏移，按配置顺序循环选择可用点；点位被占用或不安全时，只能在解析后的 `safe_bounds` 内做有界最近安全点搜索，绝不能把玩家放入虚空。Spectator 退出时优先返回其大厅残影位置，失效时再使用该回退列表。
 
 ### 3.3 Portal 位置
 
-世界生成必须保证唯一 `multiplayer_portal` 的实际中心与 `lobby.center` 一致。
+世界生成必须保证唯一 `multiplayer_portal` 位于大厅图案的唯一中心 Tile。Portal 不要求使用世界坐标 `(0, 0)`；它的实际 Tile 坐标在 world 启动后成为 Lobby 与全部 Zone 的坐标锚点。
 
 推荐流程：
 
-1. Portal 作为大厅 static layout 的固定对象生成；
-2. world 启动时查找唯一 Portal；
-3. 校验其 Prefab、数量和坐标误差；
-4. 校验失败时停止 Agon runtime，并输出可定位错误；
-5. 不允许运行时静默选择另一个 Portal 或改写大厅中心。
+1. worldgen 在地图中央附近选择能够容纳完整相对布局及边缘安全距离的合法 Tile；
+2. 以该 Tile 为 static layout anchor，同时生成大厅地面和中心 Portal；
+3. world 启动时查找唯一 Portal，读取其实际 world 坐标并转换为 Portal Tile 坐标；
+4. 用 `portal_tile + center_offset` 解析 Lobby 和全部 Zone 的实际中心与三层边界；
+5. 校验 Portal Prefab、唯一性、Portal 位于大厅中心、Zone 间距及所有解析边界的地图边距；
+6. 校验失败时停止 Agon runtime，并输出可定位错误；不得静默选择另一个 Portal、把世界原点当作 Portal，或临时平移个别 Zone。
 
-Portal 用于 shard 迁移和大厅锚点，但大厅的业务定义仍以静态配置为准。
+Portal 同时用于 shard 迁移和整个 Agon Layout 的坐标锚点。静态配置只保存相对偏移；运行时解析结果必须由 `WorldLayoutService` 统一持有，Mode 不得自行读取 Portal 后重复换算。
 
 ### 3.4 运行时场景构建、变更与清理
 
@@ -412,7 +413,8 @@ AgonRuntime = {
 Zone = {
     zone_id,
     zone_category,
-    center,
+    center_offset,   -- 静态配置：相对 Portal Tile
+    resolved_center, -- 运行时：Portal Tile + center_offset
     safe_bounds,
     build_bounds,
     hard_bounds,
@@ -436,7 +438,7 @@ FREE → RESERVED → BUILDING → ACTIVE → RESETTING → FREE
 - `RESETTING`：正在清理实体、资源和地形；
 - `QUARANTINED`：验证失败，不再自动分配。
 
-`zone_category` 是 Zone 的物理尺寸类别。比如 `zone_category = "LARGE"` 的 Zone 只分配给声明需要 LARGE 场地的 GameMode。它不等于玩法名称、某一局或能力集合，也不保存具体玩法状态。Participant 出生点、spectator anchor 和 camera bounds 属于当前 ScenePlan revision，不属于 Zone 静态定义。
+`zone_category` 是 Zone 的物理尺寸类别。比如 `zone_category = "LARGE"` 的 Zone 只分配给声明需要 LARGE 场地的 GameMode。它不等于玩法名称、某一局或能力集合，也不保存具体玩法状态。`center_offset` 可以保存，`resolved_center` 必须由当前世界的 Portal 实际 Tile 解析，不能跨存档硬编码复用。Participant 出生点、spectator anchor 和 camera bounds 属于当前 ScenePlan revision，不属于 Zone 静态定义。
 
 ### 5.3 Instance
 
