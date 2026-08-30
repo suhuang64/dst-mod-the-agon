@@ -36,7 +36,7 @@ GameMode Definition 1 ─┬─ Instance A ── Zone A
                        └─ Instance B ── Zone B
 ```
 
-同一种 GameMode 可以同时创建多局。Zone 通过 `zone_category` 限定可承载的模式类别；重置后只能分配给要求相同类别的 GameMode。
+同一种 GameMode 可以同时创建多局。Zone 通过 `zone_category` 表示物理尺寸级别，固定为 `SMALL`、`MEDIUM` 或 `LARGE`；GameMode 只声明自己需要的尺寸，不把 `FEAST`、`PVP` 等玩法名称写成 Zone 类别。
 
 ### 1.2 强制红线
 
@@ -130,49 +130,93 @@ The Agon 使用专门的世界生成方案：
 
 ### 3.2 Layout 配置
 
-推荐的静态定义：
+正式静态定义使用以世界中心为原点的 Tile 坐标；运行时世界坐标由统一转换器乘 `TILE_SCALE`，Mode 和 Service 不得各自换算：
 
 ```lua
 WorldLayoutDefinition = {
     layout_version = 1,
+    world_size_tiles = { width = 400, height = 400 },
+    coordinate_unit = "TILE_FROM_WORLD_CENTER",
 
     lobby = {
         center = { x = 0, z = 0 },
-        bounds = { ... },
-        spawn_points = { ... },
-        return_points = { ... },
-        terrain_layout = { ... },
+        safe_size = { width = 14, height = 14 },
+        build_size = { width = 16, height = 16 },
+        hard_size = { width = 20, height = 20 },
+        portal_prefab = "multiplayer_portal",
+        spawn_and_return_points = {
+            { x = 3, z = 0 }, { x = -3, z = 0 },
+            { x = 0, z = 3 }, { x = 0, z = -3 },
+            { x = 2, z = 2 }, { x = 2, z = -2 },
+            { x = -2, z = 2 }, { x = -2, z = -2 },
+        },
+        terrain_layout = "MAXWELL_RITUAL_HALL_V1",
+    },
+
+    zone_sizes = {
+        SMALL = {
+            safe_size = { width = 11, height = 11 },
+            build_size = { width = 13, height = 13 },
+            hard_size = { width = 17, height = 17 },
+        },
+        MEDIUM = {
+            safe_size = { width = 28, height = 28 },
+            build_size = { width = 30, height = 30 },
+            hard_size = { width = 34, height = 34 },
+        },
+        LARGE = {
+            safe_size = { width = 120, height = 60 },
+            build_size = { width = 122, height = 62 },
+            hard_size = { width = 126, height = 66 },
+        },
     },
 
     zones = {
-        {
-            zone_id = "zone_a",
-            zone_category = "FEAST",
-            center = { x = 1000, z = 0 },
-            bounds = { ... },
-            safe_bounds = { ... },
-            spawn_points = { ... },
-            spectator_anchors = { ... },
-            spectator_camera_bounds = { ... },
-        },
+        -- SMALL: safe 11x11, build 13x13, hard 17x17
+        { zone_id = "small_01", zone_category = "SMALL", center = { x = -155, z =  50 } },
+        { zone_id = "small_02", zone_category = "SMALL", center = { x =  155, z =  50 } },
+        { zone_id = "small_03", zone_category = "SMALL", center = { x = -155, z = -50 } },
+        { zone_id = "small_04", zone_category = "SMALL", center = { x =  155, z = -50 } },
+
+        -- MEDIUM: safe 28x28, build 30x30, hard 34x34
+        { zone_id = "medium_01", zone_category = "MEDIUM", center = { x = -105, z =  50 } },
+        { zone_id = "medium_02", zone_category = "MEDIUM", center = { x =  105, z =  50 } },
+        { zone_id = "medium_03", zone_category = "MEDIUM", center = { x = -105, z = -50 } },
+        { zone_id = "medium_04", zone_category = "MEDIUM", center = { x =  105, z = -50 } },
+
+        -- LARGE 横向: safe 120x60, build 122x62, hard 126x66
+        { zone_id = "large_01", zone_category = "LARGE", center = { x = 0, z =  115 } },
+        { zone_id = "large_02", zone_category = "LARGE", center = { x = 0, z = -115 } },
     },
 }
 ```
 
-坐标仅作结构示例。
-
-- `zone_category` 是稳定的场地分类，例如 `FEAST`、`DUNGEON`；
+- 上述世界尺寸、坐标、数量和三层尺寸是正式值，不是示例；
+- `zone_category` 只表示物理尺寸，固定为 `SMALL`、`MEDIUM`、`LARGE`；
 - GameMode definition 声明自己需要哪个 `zone_category`；
 - ZoneManager 只从相同类别的空闲 Zone 中分配；
 - 类别只用于场地选择，不把关卡、胜负、Wave 等玩法状态写入 Zone；
-- `bounds` 是场地构建、实体生成和清理的硬边界；
-- `safe_bounds` 是玩家正常活动边界，应小于 `bounds`。
+- `safe_bounds` 是当前场景允许玩家正常活动的区域；
+- `build_bounds` 是 ScenePlan 可以铺地和布置场景的区域；
+- `hard_bounds` 是任何地形事务、实体生成、回滚和清理都不得越过的绝对边界；
+- 三层边界必须满足 `safe_bounds ⊂ build_bounds ⊂ hard_bounds`，并由类别尺寸和 Zone 中心计算，不在每个 Zone 重复手写；
+- 所有 LARGE Zone 固定为横向，宽度沿 x 轴、高度沿 z 轴。
+- 以轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离不得小于 24 Tile；任意 `hard_bounds` 到地图边缘的距离不得小于 36 Tile。正式坐标的实际最小值分别为 24.5 和 36.5 Tile。
 
-Zone 不设置能力标签集合。场地尺寸、出生点和观战点等必要数据直接属于 Zone definition；某个模式若有特殊场地需求，应使用独立 `zone_category` 和自己的场地构建器。
+Zone 不设置能力标签集合，也不保存固定 Participant 出生点、spectator anchor 或 camera bounds。每个 ScenePlan revision 必须根据当时实际地形声明这些动态锚点；SceneService 在提交场景前验证它们位于有效地面和对应边界内。WorldLayout 只提供 Zone 中心和三层物理边界。锚点变更失败时保留最后一个已提交 revision；若不存在可用的已提交锚点，则中止 Instance 并把 Participant/Spectator 安全送回大厅，绝不把 Zone 中心当作落点，因为空闲 Zone 中心是虚空。
+
+大厅的 `MAXWELL_RITUAL_HALL_V1` 是固定 16×16 Tile 对称图案，按以下顺序铺设，后写层覆盖先写层：
+
+1. 全部 16×16 使用 `WORLD_TILES.CARPET2`；
+2. 从中心向四边铺设 2 Tile 宽的十字通道，使用 `WORLD_TILES.WOODFLOOR`；
+3. 中央 6×6 使用 `WORLD_TILES.CHECKER`；
+4. 最外侧 1 Tile 环使用 `WORLD_TILES.BRICK_GLOW`。
+
+`multiplayer_portal` 位于 `(0, 0)`。大厅出生/返回点按配置顺序循环选择可用点；点位被占用或不安全时，只能在 `safe_bounds` 内做有界最近安全点搜索，绝不能把玩家放入虚空。Spectator 退出时优先返回其大厅残影位置，失效时再使用该回退列表。
 
 ### 3.3 Portal 位置
 
-世界生成必须保证 `multiplayer_portal` 或 `multiplayer_portal_moonrock` 的实际中心与 `lobby.center` 一致。
+世界生成必须保证唯一 `multiplayer_portal` 的实际中心与 `lobby.center` 一致。
 
 推荐流程：
 
@@ -231,7 +275,7 @@ TheWorld.minimap.MiniMap:RebuildLayer(...)
 Stop gameplay
 → Close child Scopes and cancel tasks/listeners/effects
 → Remove all Instance-owned entities
-→ Set every tile in Zone bounds to WORLD_TILES.IMPASSABLE
+→ Set every tile in Zone hard_bounds to WORLD_TILES.IMPASSABLE
 → Rebuild world/minimap layers
 → Validate no ground and no managed entity remain
 → FREE
@@ -239,7 +283,7 @@ Stop gameplay
 
 限制：
 
-- 只能修改当前 Instance 租用 Zone 的 `bounds` 内 Tile；
+- 只能修改当前 Instance 租用 Zone 的 `hard_bounds` 内 Tile；普通场景内容还必须限制在 `build_bounds`；
 - ScenePlan 必须基于当前 scene revision，过期计划不得覆盖新场景；
 - `LIVE_PATCH` 只能影响声明的 affected bounds，不能借机扫描或修改整个 Zone；
 - `GetTileAtPoint()` 返回无效值时必须失败，不得向地图边界外扩张；
@@ -365,11 +409,9 @@ Zone = {
     zone_id,
     zone_category,
     center,
-    bounds,
     safe_bounds,
-    spawn_points,
-    spectator_anchors,
-    spectator_camera_bounds,
+    build_bounds,
+    hard_bounds,
 
     state,
     reserved_instance_id,
@@ -390,7 +432,7 @@ FREE → RESERVED → BUILDING → ACTIVE → RESETTING → FREE
 - `RESETTING`：正在清理实体、资源和地形；
 - `QUARANTINED`：验证失败，不再自动分配。
 
-`zone_category` 是 Zone 的分配类别。比如 `zone_category = "FEAST"` 的 Zone 只分配给声明需要 `FEAST` 类别的 GameMode。它不等于某一局，也不保存具体玩法状态。
+`zone_category` 是 Zone 的物理尺寸类别。比如 `zone_category = "LARGE"` 的 Zone 只分配给声明需要 LARGE 场地的 GameMode。它不等于玩法名称、某一局或能力集合，也不保存具体玩法状态。Participant 出生点、spectator anchor 和 camera bounds 属于当前 ScenePlan revision，不属于 Zone 静态定义。
 
 ### 5.3 Instance
 
@@ -640,7 +682,7 @@ AudienceStateChannel 是公共网络边界，支持 `PRIVATE(userid)`、`GROUP(g
 
 ### 6.1 Lobby
 
-玩家从其他 shard 进入后，在 `lobby.return_points` 中选择安全点生成。
+玩家从其他 shard 进入后，在 `lobby.spawn_and_return_points` 中选择安全点生成。
 
 大厅负责：模式选择、组队和匹配 UI、玩家社交、进入/退出观战、比赛结束返回、状态恢复安全区和 shard Portal。
 
@@ -675,7 +717,7 @@ SpectatorRecord = {
 
 1. 记录玩家在大厅的原位置和目标 Instance；
 2. 在该位置生成一个 `agon_spectator_echo` 人物残影；
-3. 把真实玩家放到目标 Zone 对应的安全 spectator anchor；
+3. 把真实玩家放到目标 Instance 当前 ScenePlan revision 声明并验证通过的安全 spectator anchor；
 4. 隐藏真实实体、阴影和地图图标；
 5. 禁用物理、碰撞、受击、被选中和所有 gameplay action；
 6. 暂停玩家自身生命、饥饿、理智、温度等数值变化，但不改写现有数值；
@@ -721,7 +763,7 @@ EnterSpectating
 → RemoveRuntimeGuard
 ```
 
-正常退出观战、目标 Instance 结束、玩家断线、shard 迁移失败、服务器关闭和异常清理都必须移除残影。真实玩家返回时优先使用原大厅位置（即残影所在的位置）；位置失效或不安全时使用 `lobby.return_points`。
+正常退出观战、目标 Instance 结束、玩家断线、shard 迁移失败、服务器关闭和异常清理都必须移除残影。真实玩家返回时优先使用原大厅位置（即残影所在的位置）；位置失效或不安全时使用 `lobby.spawn_and_return_points`。
 
 外观复制必须使用独立的只读 appearance data，不得把真实玩家的 inventory item、组件或 child entity 挂到残影上。换装、Mod 皮肤和重连行为需在实现阶段验证。
 
@@ -730,7 +772,7 @@ EnterSpectating
 观战相机支持：
 
 - 跟随当前 Instance 中允许观看的 Participant；
-- 在 `spectator_camera_bounds` 内自由移动；
+- 在当前 ScenePlan revision 的 `spectator_camera_bounds` 内自由移动；
 - 不允许跨 Zone 查看另一个 Instance；
 - GameMode 可配置是否允许观战、观战人数、团队视角和延迟策略。
 
@@ -1242,7 +1284,7 @@ the-agon/
 ModeRegistry:Register({
     mode_id = "TEST_MODE",
     mode_version = 1,
-    zone_category = "TEST",
+    zone_category = "SMALL",
     services = {
         "phase",
         "clock",
@@ -1487,7 +1529,7 @@ agon.cleanup_zone <id>
 
 - 场地构建和 SceneTransaction 不能修改 Zone 外 Tile；
 - A 的地形变化不影响 B；
-- 创建 Instance 时能从虚空完整构建对应 category 的场地；
+- 创建 Instance 时能从虚空完整构建所需 `SMALL/MEDIUM/LARGE` 尺寸的场地；
 - `BLOCKING` 能冻结单个 Instance、完成全场或局部重构并安全恢复；
 - `LIVE_PATCH` 只修改 affected bounds，正确处理占用 Tile 的玩家、物品、怪物和容器；
 - 过期 scene revision 被拒绝，失败 Patch 能回滚或使 Zone 进入 QUARANTINED；
@@ -1535,7 +1577,7 @@ agon.cleanup_zone <id>
 ### Phase 1：Zone 与 Instance 骨架
 
 - ZoneManager、InstanceManager；
-- `zone_category` 分配、初始 ScenePlan 构建/清空；
+- `SMALL/MEDIUM/LARGE` 尺寸分配、初始 ScenePlan 构建/清空；
 - reservation、状态机和 TestMode；
 - 双 Instance 并发。
 

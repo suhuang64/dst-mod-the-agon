@@ -39,7 +39,7 @@
 4. 识别用户已有的未提交和未跟踪文件；不得覆盖、删除或纳入无关修改。
 5. 用 `rg` 检查当前仓库是否已经存在本 WP 的部分实现，不得假设仍是绿地状态。
 6. 涉及 DST API、Prefab、Component、Brain、StateGraph、RPC、网络、世界生成和保存时，先查 `D:\OneDrive\DST\scripts` 官方源码。
-7. 在修改前写出本次的：目标、涉及文件、验证方法和仍缺少的输入。
+7. 在修改前写出本次的目标、涉及文件和验证方法；发现新的实质性不确定性时按停止条件处理，不重复询问本文已固定的配置。
 
 ### 1.2 每个 Agent 完成后必须报告
 
@@ -58,7 +58,7 @@
 
 出现以下任一情况，Agent 必须停止当前危险路径并向用户说明，而不是猜测：
 
-- 正式 WorldLayout 坐标或地图大小尚未提供；
+- 实际 DST API 或坐标换算结果使本文的正式 WorldLayout 无法成立；
 - 官方源码中找不到计划依赖的 API，或实际签名与设计假设不一致；
 - 需要修改 `D:\OneDrive\DST\scripts`；
 - 需要全局安装软件或依赖；
@@ -138,49 +138,9 @@ WP5/WP6 与 WP7/WP8 在 WP4 稳定后可以分支开发；WP9 必须等待 WP6 �
 
 ---
 
-## 3. 实施前仍需用户提供的输入
+## 3. 全局工程契约
 
-以下值不能从设计文档中安全推断。Agent 可以先实现 schema、验证器和开发占位接口，但不得把结构示例当生产值。
-
-### G1：正式 WorldLayout
-
-必须由用户确认：
-
-- 世界 Tile 尺寸；
-- `lobby.center`；
-- 大厅 bounds、terrain layout、spawn points、return points；
-- Portal 使用 `multiplayer_portal` 还是 `multiplayer_portal_moonrock`；
-- 每个 Zone 的 `zone_id`、`zone_category`、center、bounds、safe bounds；
-- Participant spawn points；
-- spectator anchors 和 camera bounds；
-- Zone 之间、Zone 与 Lobby 之间的最小安全距离；
-- 是否在正式 Layout 中保留两个仅管理员可用的 `TEST` Zone。
-
-在 G1 未完成前：
-
-- 可以完成配置类型、边界验证、坐标转换和错误报告；
-- 可以使用明确标注为 `DEV_ONLY` 的测试 Layout 做本地验证；
-- 不得把 DEV Layout 宣称为最终世界配置；
-- 不得把 `base-design.md` 中的 `x = 1000` 当作正式坐标。
-
-### G2：运行时测试环境
-
-进入首次专服验证前，需要知道：
-
-- DST Dedicated Server 的启动方式；
-- 测试 Cluster 和目标 shard；
-- Mod 如何挂载到该测试环境；
-- 服务端、客户端和崩溃日志位置；
-- 是否允许使用测试存档重建世界；
-- 至少两个客户端如何加入并执行并发测试。
-
-没有 G2 时，Agent 只能声明静态验证完成。
-
----
-
-## 4. 全局工程契约
-
-### 4.1 Shard 与加载边界
+### 3.1 Shard 与加载边界
 
 - `modinfo.lua` 公开配置只保留 `enable_agon = true/false`。
 - 所有 shard 的 Mod 都是 enabled；由各 shard 的 `modoverrides.lua` 单独决定 `enable_agon`。
@@ -189,7 +149,7 @@ WP5/WP6 与 WP7/WP8 在 WP4 稳定后可以分支开发；WP9 必须等待 WP6 �
 - `enable_agon = false` 时不得存在 manager、world listener、periodic task、Zone scan 或后端请求。
 - 不用 shard 名称、master/secondary 身份推测 Agon 角色。
 
-### 4.2 ID、generation 与 revision
+### 3.2 ID、generation 与 revision
 
 统一使用不可变稳定 ID：
 
@@ -208,7 +168,7 @@ event_id          ScoreLedger 幂等键
 - ScenePlan 必须声明 expected scene revision。
 - 旧 generation/revision 的回调和 RPC 只能被拒绝，不能“尽量继续”。
 
-### 4.3 错误模型
+### 3.3 错误模型
 
 公共接口不得依赖随意字符串和静默 `nil`。实现阶段应建立集中错误码，例如：
 
@@ -231,7 +191,7 @@ RESTORE_BLOCKED
 
 错误至少记录：`shard_id`、`instance_id`、`zone_id`、`mode_id`、`userid`、lifecycle、operation 和 error code。
 
-### 4.4 Lua 与模块约束
+### 3.4 Lua 与模块约束
 
 - 遵循 DST Lua 版本和官方代码可用语法；不要假设现代 Lua 特性存在。
 - 不引入第三方依赖来完成基础表、ID、状态机或序列化。
@@ -242,7 +202,7 @@ RESTORE_BLOCKED
 - Mode 不直接调用 `change_tile()` 或裸 `SpawnPrefab()`。
 - Mode 不无条件修改 `TUNING` 或所有同名 Prefab。
 
-### 4.5 保存策略
+### 3.5 保存策略
 
 第一版固定为 `ABORT_ON_RESTART`：
 
@@ -253,7 +213,7 @@ RESTORE_BLOCKED
 - 原 PlayerSandbox snapshot 在恢复验证成功前永不删除；
 - settlement 和 score event 使用幂等 ID。
 
-### 4.6 Debug 是交付内容
+### 3.6 Debug 是交付内容
 
 至少逐步实现：
 
@@ -283,9 +243,41 @@ agon.restore.export <userid>
 
 Debug 命令必须 server-only、管理员可用、参数校验完整，并调用正式公共 pipeline；不得建立绕过生命周期的“快捷修复”。
 
+### 3.7 固定开发与运行验证环境
+
+Base 的本地运行验证使用现有单 shard 测试环境：
+
+```text
+Cluster: D:\OneDrive\DST\klei\DoNotStarveTogether\Test
+Shard:   World01（id = 1，is_master = true）
+Mod:     D:\SteamLibrary\steamapps\common\Don't Starve Together\mods\the-agon
+Target:  D:\OneDrive\DST\the-agon（现有 SymbolicLink）
+Start:   D:\OneDrive\DST\start.sh
+Server log: D:\OneDrive\DST\klei\DoNotStarveTogether\Test\World01\server_log.txt
+Chat log:   D:\OneDrive\DST\klei\DoNotStarveTogether\Test\World01\server_chat_log.txt
+```
+
+在 PowerShell 中可直接使用与 `start.sh` 等价的命令，并保持终端会话以便查看输出和正常停服：
+
+```powershell
+& "D:\SteamLibrary\steamapps\common\Don't Starve Together\bin64\dontstarve_dedicated_server_nullrenderer_x64.exe" `
+  -persistent_storage_root d:/OneDrive/DST/klei `
+  -conf_dir DoNotStarveTogether `
+  -cluster Test `
+  -shard World01
+```
+
+- 实施 Agent 可以按当前 WP 修改 `Test/World01` 下的 `modoverrides.lua`、`server.ini`、`leveldataoverride.lua` 和该 shard 的测试存档，也可以启停该专服；
+- `Test/World01` 明确是可丢弃测试存档，世界生成验收可以直接重建，不要求备份；
+- 上述权限仅限 `Test/World01`，不得删除或改写其他 Cluster、shard、Mod 或用户数据；
+- `modoverrides.lua` 中保持 Mod enabled，并为该 shard 设置 `enable_agon = true`；验证关闭硬门时临时切换为 false，完成后恢复 true；
+- 当前环境只有 World01，因此可以验收 Agon shard 自身和 true/false 硬门，但不能声称已完成“普通 shard 跳转到 Agon shard”的跨 shard 集成验证；该项需未来有第二 shard 时补测；
+- 需要真实客户端的步骤由维护者操作至少两个客户端。Agent 必须给出编号操作步骤并记录维护者返回的结果；未执行时标记为“等待人工运行验收”，不得用服务端假玩家或静态检查替代；
+- 客户端发生异常时，由维护者提供客户端控制台输出或该客户端实际生成的日志；Agent 不得预设未经当前机器验证的客户端日志路径。
+
 ---
 
-## 5. 目标文件结构
+## 4. 目标文件结构
 
 每个 WP 只创建当前需要的文件；不要一次生成全部空文件。
 
@@ -360,14 +352,14 @@ the-agon/
 
 ---
 
-## 6. `test_mode` 总体规格
+## 5. `test_mode` 总体规格
 
-### 6.1 目的
+### 5.1 目的
 
 `test_mode` 用于证明 Base 通用能力，不提供正式奖励、匹配入口或后端排名。它必须能在没有 FEAST 代码的情况下独立验证：
 
 - Mode 注册和 service opt-in；
-- Zone category 分配；
+- `SMALL/MEDIUM/LARGE` 物理尺寸类别分配；
 - 双 Instance 并发；
 - ScenePlan、`BLOCKING`、`LIVE_PATCH`；
 - Scope 创建、转移和关闭；
@@ -378,7 +370,7 @@ the-agon/
 - Spectator 与 DeathPolicy；
 - destroy、restart abort 和 restore。
 
-### 6.2 目录
+### 5.2 目录
 
 按实现进度逐步增加：
 
@@ -396,13 +388,13 @@ scripts/agon/modes/test_mode/
 
 不要创建没有使用者的空模块。
 
-### 6.3 最终注册契约
+### 5.3 最终注册契约
 
 ```lua
 ModeRegistry:Register({
     mode_id = "TEST_MODE",
     mode_version = 1,
-    zone_category = "TEST",
+    zone_category = "SMALL",
     services = {
         "phase",
         "clock",
@@ -419,11 +411,11 @@ ModeRegistry:Register({
 
 早期 WP 可以只声明已经实现的服务；注册表必须拒绝未知服务，不能静默忽略。
 
-### 6.4 最终测试流程
+### 5.4 最终测试流程
 
 ```text
 Create Instance
-→ Initial ScenePlan 构建简单陆地与出生点
+→ Initial ScenePlan 构建简单陆地、Participant 出生点、spectator anchors 与 camera bounds
 → 创建一个 ParticipantGroup
 → Phase 1 ACTIVE
 → 记录测试 ScoreEvent
@@ -442,7 +434,7 @@ Create Instance
 → Validate and FREE
 ```
 
-### 6.5 TestMode 不得做的事
+### 5.5 TestMode 不得做的事
 
 - 不直接访问其他 Mode；
 - 不直接写 manager 私有状态；
@@ -450,12 +442,13 @@ Create Instance
 - 不直接调用裸 `SpawnPrefab()`；
 - 不修改全局 `TUNING`；
 - 不包含 FEAST 料理、角斗场战斗或钓鱼比赛规则；
+- 不新增 `TEST` 类别或专用测试 Zone；使用正式 SMALL 池并遵守同一分配、构建和清理路径；
 - 不为测试通过而跳过 ownership、Scope、RPC 或 restore 校验；
 - 不在非 Agon shard 启动。
 
-### 6.6 管理入口
+### 5.6 管理入口
 
-第一版不做正式 UI。通过 server admin Debug API 驱动：
+第一版不做正式 UI。TestMode 不进入玩家匹配列表，只能通过 server admin Debug API 驱动：
 
 ```text
 agon.test.create <userid...>
@@ -472,7 +465,7 @@ agon.test.fail <instance_id> <reason>
 
 ---
 
-## 7. Work Packages
+## 6. Work Packages
 
 ## WP0：Mod 骨架、配置硬门与静态验证
 
@@ -535,11 +528,63 @@ feat(base): 建立模组骨架与世界运行时硬门
 ### 前置
 
 - WP0 完成。
-- 正式运行验收需要 G1、G2；缺少时只能使用明确的 DEV Layout。
 
 ### 目标
 
 世界首次生成时只创建大厅陆地与唯一 Portal，其余区域保持 `WORLD_TILES.IMPASSABLE`；Zone 只存在于配置中。
+
+### 正式 WorldLayout 参数
+
+坐标统一使用“相对世界中心的 Tile 坐标”，运行时通过唯一坐标转换器乘 `TILE_SCALE`。配置、日志和 Debug 输出都同时标记单位，禁止把 Tile 坐标直接传给世界坐标 API。
+
+```lua
+world_size_tiles = { width = 400, height = 400 }
+coordinate_unit = "TILE_FROM_WORLD_CENTER"
+
+lobby = {
+    center = { x = 0, z = 0 },
+    safe_size = { width = 14, height = 14 },
+    build_size = { width = 16, height = 16 },
+    hard_size = { width = 20, height = 20 },
+    portal_prefab = "multiplayer_portal",
+}
+```
+
+Zone 共 10 个。类别只表示物理尺寸，不表示玩法：
+
+| 类别 | 数量 | `safe_bounds` | `build_bounds` | `hard_bounds` | 中心 `(x, z)` |
+| --- | ---: | ---: | ---: | ---: | --- |
+| SMALL | 4 | 11×11 | 13×13 | 17×17 | `(-155,50)`、`(155,50)`、`(-155,-50)`、`(155,-50)` |
+| MEDIUM | 4 | 28×28 | 30×30 | 34×34 | `(-105,50)`、`(105,50)`、`(-105,-50)`、`(105,-50)` |
+| LARGE | 2 | 120×60 | 122×62 | 126×66 | `(0,115)`、`(0,-115)` |
+
+LARGE 固定横向，即宽度沿 x 轴、高度沿 z 轴。Zone ID 按表顺序固定为 `small_01..04`、`medium_01..04`、`large_01..02`。三层矩形都以 Zone center 为几何中心，并满足：
+
+```text
+safe_bounds ⊂ build_bounds ⊂ hard_bounds
+```
+
+按轴对齐矩形边缘计算，任意两个 `hard_bounds` 的最短欧氏距离至少为 24 Tile，任意 `hard_bounds` 到地图边缘至少为 36 Tile；上述正式布局的实际最小值分别为 24.5 与 36.5 Tile。Validator 必须按几何边缘计算，而不是只比较中心距。
+
+- `safe_bounds`：当前场景允许玩家正常活动的区域；
+- `build_bounds`：ScenePlan 可以铺地和布置场景的区域；
+- `hard_bounds`：地形事务、实体生成、回滚、扫描和最终清理的绝对边界。
+
+大厅固定使用 `MAXWELL_RITUAL_HALL_V1` 16×16 Tile 图案，按下列优先级执行，后者覆盖前者：
+
+1. 16×16 基底：`WORLD_TILES.CARPET2`；
+2. 从中心通向四边的 2 Tile 宽十字通道：`WORLD_TILES.WOODFLOOR`；
+3. 中央 6×6：`WORLD_TILES.CHECKER`；
+4. 最外侧 1 Tile 环：`WORLD_TILES.BRICK_GLOW`。
+
+`multiplayer_portal` 的中心固定为 `(0,0)`。大厅出生点和通用返回点共用以下相对中心的有序候选：
+
+```text
+(3,0), (-3,0), (0,3), (0,-3),
+(2,2), (2,-2), (-2,2), (-2,-2)
+```
+
+LobbyService 按安全、未占用和 round-robin 选择；全部占用时只在 `safe_bounds` 内执行有界最近安全点搜索，不得落入虚空。Spectator 返回优先使用其原大厅残影位置，失效时才使用该候选列表。
 
 ### 预计文件
 
@@ -553,19 +598,23 @@ scripts/components/agon_runtime.lua
 
 ### 实施步骤
 
-1. 定义可序列化 `WorldLayoutDefinition` 和 `layout_version`。
-2. 实现启动前静态验证：坐标、bounds 包含关系、Zone 不重叠、安全间距、spawn/anchor 在合法区域、zone_id 唯一。
-3. 查询 `lavaarena`、`quagmire` 地图任务及官方 layout API，确定生成纯虚空地图和放置 Portal 的可行路径。
-4. `modworldgenmain.lua` 使用同一个 `enable_agon` 开关；关闭时不改变其他 shard worldgen。
-5. 首次生成大厅 Tile 和 Portal，不生成 Zone 地面或玩法实体。
-6. world runtime 启动后查找 Portal，校验 Prefab、唯一性和与 `lobby.center` 的误差。
-7. Portal 校验失败时停止 Agon runtime；不能自动选另一个 Portal 或修改配置中心。
-8. OnSave/OnLoad 保存 layout version，避免重启重复生成。
+1. 把上述正式值写入可序列化 `WorldLayoutDefinition`，初始 `layout_version = 1`；不得另建 DEV Layout 取代正式配置。
+2. 实现唯一的 Tile/world 坐标转换器和中心矩形构造器；对偶数尺寸特别验证宽、高和中心，防止 off-by-one 或半 Tile 漂移。
+3. 实现启动前静态验证：世界尺寸、坐标单位、三层 bounds 包含关系、24 Tile Zone 间距、36 Tile 地图边距、zone_id 唯一、类别与尺寸匹配、大厅点位位于 `safe_bounds`。
+4. 查询 `lavaarena`、`quagmire` 地图任务及官方 layout API，使用 400×400 Tile 世界生成纯虚空地图并放置 Portal。
+5. `modworldgenmain.lua` 使用同一个 `enable_agon` 开关；关闭时不改变其他 shard worldgen。
+6. 首次生成大厅 Tile 图案和唯一 `multiplayer_portal`，不生成 Zone 地面或玩法实体。
+7. world runtime 启动后查找 Portal，校验 Prefab、唯一性和与 `(0,0)` 的误差。
+8. Portal 校验失败时停止 Agon runtime；不能自动选另一个 Portal 或修改配置中心。
+9. OnSave/OnLoad 保存 layout version，避免重启重复生成。
 
 ### 官方源码核对
 
 - `scripts/map/tasks/lavaarena.lua`
 - `scripts/map/tasks/quagmire.lua`
+- `scripts/map/forest_map.lua` 的世界尺寸设置路径
+- `scripts/constants.lua` 的 `TILE_SCALE`
+- `scripts/tiledefs.lua` 的正式 Tile 名称
 - `scripts/prefabs/multiplayer_portal.lua`
 - `scripts/map/` 下实际使用的 static layout 和任务 API
 - `scripts/modutil.lua` 的 worldgen Mod API
@@ -574,14 +623,16 @@ scripts/components/agon_runtime.lua
 
 - `enable_agon = false` 的 shard 地图生成不受影响。
 - Agon shard 只有大厅为陆地，其余均为 IMPASSABLE，不是海洋。
-- Portal 唯一且坐标与配置一致。
-- 所有 Zone bounds 落在有效地图范围且初始无地面。
+- 大厅四种 Tile 的范围、覆盖优先级和 16×16 尺寸逐 Tile 正确。
+- Portal 唯一、Prefab 为 `multiplayer_portal` 且中心为 `(0,0)`。
+- 10 个 Zone 的类别、中心和三层尺寸与上表一致；所有 `hard_bounds` 落在地图内且初始无地面。
+- 大厅候选点均在安全地面；占用回退搜索不会越过 `safe_bounds`。
 - 保存/重启不重复放置 Portal 或大厅对象。
 - 错误 Layout 会在启动前给出可定位错误。
 
 ### 完成定义
 
-需要截图、Tile 检查或服务端日志证明实际地图结果；只有静态检查时必须注明未完成运行验收。
+在可直接重建的 `Test/World01` 中完成首次生成，使用截图、逐 Tile/边界 Debug 检查和服务端日志证明实际地图结果。只有静态检查时必须注明 WP1 尚未完成，不能进入依赖真实地图的 WP。
 
 ### 建议 Commit
 
@@ -618,7 +669,7 @@ scripts/agon/debug/diagnostics.lua
 3. 实现保存递增序列和稳定 `instance_id`。
 4. 实现 Instance 主生命周期及合法转移表。
 5. ModeRegistry 校验 `mode_id`、version、zone category、services 和工厂函数；禁止重复 mode_id。
-6. 建立最小 TestMode，仅请求 `TEST` Zone，不启用 Common Services。
+6. 建立最小 TestMode，请求 `SMALL` Zone；此时不启用 Common Services。
 7. 创建/销毁任一步失败都回滚 reservation。
 8. 增加 `agon.instances`、`agon.zones`、`agon.destroy_instance` 的最小诊断能力。
 
@@ -673,13 +724,14 @@ scripts/agon/debug/diagnostics.lua
 4. EntityRegistry 保存 Instance、Scope、category、generation、profile、parent 和 spawn source。
 5. 实现 SpawnService；Mode 不得调用裸 `SpawnPrefab()`。
 6. SpawnService 在 Prefab constructor 前压入 spawn context，并用受保护调用保证异常后弹出；同步 child entity 继承 Instance/Scope。
-7. 实现 ScenePlan schema 和严格 validation。
+7. 实现 ScenePlan schema 和严格 validation。每个完整 ScenePlan revision 必须声明 Participant spawn points、spectator anchors、camera bounds 和 emergency safe points；局部 Patch 必须明确继承或替换哪些锚点。
 8. TerrainService 封装 `GetTileCoordsAtPoint`、`GetTileAtPoint`、`SetTile`、world/minimap rebuild；唯一内部 `change_tile()` 位于此处。
 9. SceneTransaction 记录修改前后 Tile、scope、scene revision、execution mode 和 rollback state。
 10. 实现 `BLOCKING`：只冻结目标 Instance，应用、验证、commit 或 rollback。
-11. 实现 `LIVE_PATCH`：限定 affected bounds，支持 `REJECT_IF_OCCUPIED` 与 `MOVE_TO_SAFE_POINT`；`MODE_RESOLVE` 只预留注册接口，不写玩法规则。
-12. TestMode 提供 initial plan、blocking patch、live empty patch、live occupied reject、live occupied move。
-13. Destroy pipeline 关闭 Scope、删除实体、把整个 Zone 清回 IMPASSABLE、验证后 FREE；失败则 QUARANTINED。
+11. 实现 `LIVE_PATCH`：限定 affected bounds，支持 `REJECT_IF_OCCUPIED` 与 `MOVE_TO_SAFE_POINT`；`MODE_RESOLVE` 只预留注册接口，不写玩法规则。Patch 后重新验证仍在使用的动态锚点没有落入虚空或越界。
+12. 动态锚点事务失败时保持最后一个已提交 ScenePlan revision；没有可用旧 revision 时中止 Instance，并通过正式恢复/返回流程把 Participant 和 Spectator 送回大厅。不得使用 Zone center 作为紧急落点。
+13. TestMode 提供 initial plan、blocking patch、live empty patch、live occupied reject、live occupied move。
+14. Destroy pipeline 关闭 Scope、删除实体、把 Zone `hard_bounds` 全部清回 IMPASSABLE、验证后 FREE；失败则 QUARANTINED。
 
 ### 官方源码核对
 
@@ -693,6 +745,8 @@ scripts/agon/debug/diagnostics.lua
 #### 单 Instance
 
 - 从纯虚空构建 TestMode 初始陆地。
+- ScenePlan 提供的 Participant spawn points、spectator anchors 和 camera bounds 全部落在当前 revision 的有效地面及对应 `safe_bounds`/`build_bounds` 内。
+- BLOCKING 或 LIVE_PATCH 改变布局后，旧锚点被明确继承或替换，不会继续指向已经变成虚空的 Tile。
 - 过期 scene revision 被拒绝。
 - BLOCKING 期间该局输入被冻结，其他局不受影响。
 - LIVE_PATCH 不修改 affected bounds 外 Tile。
@@ -1055,11 +1109,22 @@ feat(recovery): 完成重启中止与幂等恢复结算
 
 不再新增架构功能，只修复集成验证发现的问题，证明 Base 可以承载正式 Mode。
 
+### 执行方式
+
+1. 只使用 3.7 节定义的 `Test/World01`，先记录 `server_log.txt` 的起始时间或行号，避免把旧日志当成本次证据。
+2. 在 `World01/modoverrides.lua` 中启用本 Mod，并设置 `enable_agon = true`；TestMode 仍只允许管理员入口，不加入正式模式列表。
+3. 直接重建 World01 测试存档，启动专服，先完成大厅、Portal、10 个虚空 Zone 槽位和正常天数增长验收。
+4. Agent 给维护者一份编号客户端脚本，明确“客户端 A/B 分别加入、执行哪个动作、应看到什么、失败时返回什么信息”；维护者操作至少两个真实客户端。
+5. 每个测试用例记录：时间、客户端身份、instance_id、zone_id、scene revision、seed、Debug 输出、服务端日志范围和观察结果。
+6. 需要验证关闭硬门时，把 `enable_agon` 临时改为 false 并重启 World01；验证结束后恢复 true。false 状态下不得为了测试方便创建 Agon manager。
+7. 运行中发现错误时先保留日志和状态，再通过正式 destroy/restore/cleanup pipeline 收口；只有 Test/World01 存档可以直接重建，不能清理其他路径。
+8. 真实客户端步骤未执行时，WP10 状态只能是“等待人工运行验收”，不能判定 Base Ready。
+
 ### 完整验收矩阵
 
 #### A. Shard Gate
 
-- 非 Agon shard 无 manager、listener、task、worldgen 变化和后端请求。
+- 同一 World01 在 `enable_agon = false` 时无 manager、listener、task、worldgen hook 副作用和后端请求。
 - Agon shard 客户端/服务端模块边界正确。
 
 #### B. 双 Instance
@@ -1071,7 +1136,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 #### C. Scene
 
 - initial、BLOCKING、LIVE_PATCH、rollback、stale revision、occupied policy 全覆盖。
-- Zone bounds 外 Tile 从未被修改。
+- Zone `hard_bounds` 外 Tile 从未被修改；普通构建内容未越过 `build_bounds`。
 - 结束后无地面、实体或 minimap layer 残留。
 
 #### D. EntityProfile
@@ -1118,7 +1183,9 @@ feat(recovery): 完成重启中止与幂等恢复结算
 5. BLOCKING 和 LIVE_PATCH 都有运行证据；
 6. EntityProfile 跨 Instance 不污染；
 7. 重启中止与恢复通过；
-8. 所有未验证项已明确记录，不把关键安全行为留作“以后再测”。
+8. 当前单 shard 范围内的关键安全行为全部有运行证据；“普通 shard → Agon shard”的实际迁移明确标记为生产前集成测试，不冒充已验证。
+
+当前 `Test` Cluster 只有 World01。通过本 WP 代表 Base 在专用 Agon shard 内达到可开发正式 Mode 的条件，不代表跨 shard 迁移已通过；增加第二 shard 后必须补测：普通世界保持 `enable_agon = false`、Agon 世界为 true、玩家往返迁移、断线与迁移失败恢复。
 
 ### 建议 Commit
 
@@ -1128,14 +1195,13 @@ test(base): 完成通用底座全链路集成验收
 
 ---
 
-## 8. 每个 WP 的通用验证命令
+## 7. 每个 WP 的通用验证命令
 
 根据仓库实际工具选择；不得为文档要求而全局安装新工具。
 
 ```powershell
 git -c safe.directory='D:/OneDrive/DST/the-agon' status --short
 git -c safe.directory='D:/OneDrive/DST/the-agon' diff --check
-rg -n "ZoneCapabilities|required_zone_capabilities|GetArenaBlueprint|team_id" .
 rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 ```
 
@@ -1144,7 +1210,6 @@ rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 - `SpawnPrefab()` 只允许出现在 SpawnService 或经审核的 Base 路由内部；
 - `SetTile()` 只允许出现在 TerrainService；
 - `TUNING` 可以读取，但 Mode 不得全局改写；
-- 旧术语应为零结果。
 
 如果系统存在兼容的 Lua 语法检查工具，可以对新增 Lua 执行语法检查；没有则不要全局安装，必须在交付中说明。
 
@@ -1158,7 +1223,7 @@ rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 
 ---
 
-## 9. 可直接交给其他 AI Agent 的任务模板
+## 8. 可直接交给其他 AI Agent 的任务模板
 
 复制以下模板，只替换 `<WP>`：
 
@@ -1177,11 +1242,11 @@ rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 完成后报告：修改内容、文件、官方源码依据、静态/运行验证、未验证项、Git 状态、建议中文 Conventional Commit，以及能否进入下一 WP。不要 commit 或 push。
 ```
 
-对于涉及 G1/G2 的 WP，在缺少输入时把能安全完成的 schema、校验和静态部分做完，然后停止在运行时边界并向用户请求具体输入，不得自行编造生产配置。
+本文已经固定 WorldLayout 与本地测试环境。若实际官方 API、地图边界或运行结果与这些契约冲突，执行 Agent 应保留证据并停止相关危险路径，不得静默改写正式参数。
 
 ---
 
-## 10. 明确不属于 Base 实施的内容
+## 9. 明确不属于 Base 实施的内容
 
 以下内容不得因为 TestMode 或 FEAST 需求被顺手加入 Base：
 
@@ -1211,17 +1276,8 @@ Group 和 audience
 
 ---
 
-## 11. 当前推荐的立即行动
+## 10. 当前推荐的立即行动
 
-当前可以立刻把 WP0 交给一个 Agent 执行；它不依赖正式地图坐标，也不会触碰玩家数据。
-
-与此同时，项目维护者准备 G1 和 G2：
-
-```text
-Agent：完成 WP0 的 Mod 骨架和 shard gate
-维护者：确定正式 WorldLayout 与专服测试方式
-双方完成
-→ 进入 WP1
-```
+当前可以立刻把 WP0 交给一个 Agent 执行。WorldLayout、Mod 挂载、测试 shard、存档策略和双客户端协作方式均已写入各自的实施与验收章节。
 
 不要把多个 WP 合并成一次“大而全”的首次提交。第一批代码的合理边界是：Mod 可以安全加载、配置硬门正确、runtime 幂等创建、关闭配置时零副作用。完成该边界后再开始世界生成。
