@@ -85,6 +85,8 @@ local function StartAgonServerRuntime(world)
 end
 ```
 
+`ismastersim` 表示当前 shard 的服务端权威模拟，不表示 `Cluster` 的 `Master shard`；`Master/Secondary` 身份不得作为 Agon 启用条件。
+
 不要在这些共享注册完成前从 `modmain.lua` 顶层提前返回，否则目标 shard 的客户端功能可能缺失。`modworldgenmain.lua` 也必须读取同一个开关，避免改变其他 shard 的地图生成。
 
 `enable_agon = false` 的 shard 不得创建：

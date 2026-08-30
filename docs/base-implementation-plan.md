@@ -197,6 +197,7 @@ RESTORE_BLOCKED
 - 不引入第三方依赖来完成基础表、ID、状态机或序列化。
 - Module 不在 require 时产生世界副作用。
 - Server-only module 不应被客户端执行服务端逻辑。
+- 新增或修改代码中的自然语言注释统一使用中文；API、标识符、协议字段和必要专有名词可保留英文，工具/类型/诊断指令注释例外；注释应解释意图与约束，不复述代码，并保持适量。
 - 不保存 function、task handle、entity reference 或 Brain object。
 - Mode 不直接访问 manager 内部表；只拿到 facade。
 - Mode 不直接调用 `change_tile()` 或裸 `SpawnPrefab()`。
@@ -1236,6 +1237,8 @@ rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 3. docs/base-implementation-plan.md 中的全局工程契约、test_mode 总体规格和 <WP>
 
 先检查 Git 状态并保护用户已有修改。涉及 DST API、Prefab、Component、Brain、StateGraph、RPC、网络、世界生成或保存时，先查询 D:\OneDrive\DST\scripts，禁止修改该目录。
+
+新增或修改代码的自然语言注释必须统一使用中文；API、标识符及必要专有名词可保留英文，工具/类型/诊断指令例外，注释应说明意图与约束并保持适量。
 
 不要提前实现后续 WP，不要添加当前 WP 没有调用路径的空抽象，不要把任何具体 Mode 规则写入 Core。所有代码必须通过当前 WP 的验收项；无法运行验证时，明确列出未验证内容和风险，不得声称已经完成运行验证。
 
