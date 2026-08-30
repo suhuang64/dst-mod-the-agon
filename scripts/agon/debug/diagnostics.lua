@@ -1,0 +1,154 @@
+local Diagnostics = {}
+
+Diagnostics.PREFIX = "[TheAgon]"
+Diagnostics.SCHEMA_VERSION = 1
+
+-- WP0 保持错误码集合小而稳定。后续 WP 如需扩展领域错误码，应在不改变
+-- 本模块快照结构的前提下增量加入。
+Diagnostics.ERROR_CODES =
+{
+    INVALID_WORLD = "INVALID_WORLD",
+    INVALID_SNAPSHOT = "INVALID_SNAPSHOT",
+    NOT_SERVER_AUTHORITY = "NOT_SERVER_AUTHORITY",
+}
+
+Diagnostics.RESULTS =
+{
+    STARTED = "STARTED",
+    ALREADY_STARTED = "ALREADY_STARTED",
+}
+
+local CONTEXT_FIELDS =
+{
+    "shard_id",
+    "schema_version",
+    "boot_generation",
+    "instance_id",
+    "zone_id",
+    "mode_id",
+    "userid",
+    "lifecycle",
+    "operation",
+}
+
+local function CopyState(state)
+    local copied =
+    {
+        error_count = 0,
+        last_error_code = nil,
+        last_message = nil,
+    }
+
+    if type(state) ~= "table" then
+        return copied
+    end
+
+    if type(state.error_count) == "number" and state.error_count >= 0 then
+        copied.error_count = state.error_count
+    end
+    if type(state.last_error_code) == "string" then
+        copied.last_error_code = state.last_error_code
+    end
+    if type(state.last_message) == "string" then
+        copied.last_message = state.last_message
+    end
+
+    return copied
+end
+
+function Diagnostics.NewState()
+    return CopyState(nil)
+end
+
+function Diagnostics.CopyState(state)
+    return CopyState(state)
+end
+
+function Diagnostics.Record(state, code, message)
+    if type(state) ~= "table" then
+        return
+    end
+
+    state.error_count = (type(state.error_count) == "number" and state.error_count or 0) + 1
+    state.last_error_code = code or Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+    state.last_message = message ~= nil and tostring(message) or nil
+end
+
+function Diagnostics.FormatContext(context)
+    if type(context) ~= "table" then
+        return ""
+    end
+
+    local fields = {}
+    for i = 1, #CONTEXT_FIELDS do
+        local key = CONTEXT_FIELDS[i]
+        local value = context[key]
+        if value ~= nil then
+            table.insert(fields, key .. "=" .. tostring(value))
+        end
+    end
+    return table.concat(fields, " ")
+end
+
+function Diagnostics.Format(code, context, message)
+    local result = Diagnostics.PREFIX .. " [" .. tostring(code) .. "]"
+    local context_text = Diagnostics.FormatContext(context)
+    if context_text ~= "" then
+        result = result .. " " .. context_text
+    end
+    if message ~= nil then
+        result = result .. " " .. tostring(message)
+    end
+    return result
+end
+
+function Diagnostics.Log(code, context, message)
+    print(Diagnostics.Format(code, context, message))
+end
+
+function Diagnostics.MakeSnapshot(runtime)
+    return
+    {
+        schema_version = runtime.schema_version,
+        shard_id = runtime.shard_id,
+        boot_generation = runtime.boot_generation,
+        diagnostics = CopyState(runtime.diagnostics),
+    }
+end
+
+function Diagnostics.ValidateSnapshot(snapshot)
+    if type(snapshot) ~= "table" then
+        return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+    end
+    if snapshot.schema_version ~= Diagnostics.SCHEMA_VERSION then
+        return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+    end
+    if type(snapshot.shard_id) ~= "string" or snapshot.shard_id == "" then
+        return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+    end
+    if type(snapshot.boot_generation) ~= "number" or snapshot.boot_generation < 1 then
+        return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+    end
+
+    if snapshot.diagnostics ~= nil then
+        if type(snapshot.diagnostics) ~= "table" then
+            return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+        end
+        if type(snapshot.diagnostics.error_count) ~= "number"
+            or snapshot.diagnostics.error_count < 0 then
+            return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+        end
+        if snapshot.diagnostics.last_error_code ~= nil
+            and type(snapshot.diagnostics.last_error_code) ~= "string" then
+            return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+        end
+        if snapshot.diagnostics.last_message ~= nil
+            and type(snapshot.diagnostics.last_message) ~= "string" then
+            return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+        end
+    end
+
+    return true
+end
+
+return Diagnostics
