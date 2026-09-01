@@ -645,6 +645,16 @@ scripts/components/agon_runtime.lua
 feat(world): 实现专用虚空世界与大厅布局校验
 ```
 
+### WP1 延后项
+
+- 当前纯虚空地图会让官方 `hermitcrab_relocation_manager` 找不到
+  `monkeyqueen` 与 `monkeyisland_portal`，并让官方 `wagpunk_arena_manager`
+  找不到 `hermitcrab_marker` 与 `beebox_hermit`。
+- 这是官方 `forest` Prefab 无条件挂载 DLC manager，而 WP1 刻意移除官方
+  set piece 的兼容性告警；已验证不阻止大厅、Portal 和 IMPASSABLE 地图生成。
+- WP1/WP2 暂不加入伪造定位实体；后续确定 The Agon 是否需要这些官方玩法后，
+  再在生产集成阶段选择针对性跳过 manager 初始化，或保留完整官方 set piece。
+
 ---
 
 ## WP2：Zone、Instance、ModeRegistry 与空 TestMode
