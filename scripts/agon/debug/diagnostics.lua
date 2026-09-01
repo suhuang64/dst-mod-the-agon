@@ -10,12 +10,22 @@ Diagnostics.ERROR_CODES =
     INVALID_WORLD = "INVALID_WORLD",
     INVALID_SNAPSHOT = "INVALID_SNAPSHOT",
     NOT_SERVER_AUTHORITY = "NOT_SERVER_AUTHORITY",
+    LAYOUT_INVALID = "LAYOUT_INVALID",
+    LAYOUT_VERSION_MISMATCH = "LAYOUT_VERSION_MISMATCH",
+    LAYOUT_SAVE_MISMATCH = "LAYOUT_SAVE_MISMATCH",
+    MAP_SIZE_MISMATCH = "MAP_SIZE_MISMATCH",
+    PORTAL_NOT_FOUND = "PORTAL_NOT_FOUND",
+    PORTAL_NOT_UNIQUE = "PORTAL_NOT_UNIQUE",
+    PORTAL_ANCHOR_INVALID = "PORTAL_ANCHOR_INVALID",
+    HALL_TILE_MISMATCH = "HALL_TILE_MISMATCH",
+    VOID_TILE_MISMATCH = "VOID_TILE_MISMATCH",
 }
 
 Diagnostics.RESULTS =
 {
     STARTED = "STARTED",
     ALREADY_STARTED = "ALREADY_STARTED",
+    LAYOUT_READY = "LAYOUT_READY",
 }
 
 local CONTEXT_FIELDS =
@@ -29,6 +39,22 @@ local CONTEXT_FIELDS =
     "userid",
     "lifecycle",
     "operation",
+    "layout_version",
+    "layout_status",
+    "portal_tile_x",
+    "portal_tile_z",
+    "offset_tile_x",
+    "offset_tile_z",
+    "resolved_tile_x",
+    "resolved_tile_z",
+    "world_x",
+    "world_z",
+    "portal_world_x",
+    "portal_world_z",
+    "map_width",
+    "map_height",
+    "tile_x",
+    "tile_z",
 }
 
 local function CopyState(state)
