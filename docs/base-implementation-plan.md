@@ -40,7 +40,7 @@
 5. 用 `rg` 检查当前仓库是否已经存在本 WP 的部分实现，不得假设仍是绿地状态。
 6. 涉及 DST API、Prefab、Component、Brain、StateGraph、RPC、网络、世界生成和保存时，先查 `D:\OneDrive\DST\scripts` 官方源码。
 7. 在修改前写出本次的目标、涉及文件和验证方法；发现新的实质性不确定性时按停止条件处理，不重复询问本文已固定的配置。
-8. 完整读取并核对 `docs/base-implemtation-logs.md`；把相关历史结论当作待复核上下文，不得跳过当前代码、官方源码和运行环境检查。
+8. 完整读取并核对 `docs/base-implementation-logs.md`；把相关历史结论当作待复核上下文，不得跳过当前代码、官方源码和运行环境检查。
 
 ### 1.2 每个 Agent 完成后必须报告
 
@@ -53,13 +53,13 @@
 - 一条中文 Conventional Commit 信息；
 - 下一 WP 是否满足进入条件。
 
-完成报告必须在 `docs/base-implemtation-logs.md` 末尾追加同一任务的执行记录；没有代码修改时也要记录检查结果和未修改原因。
+完成报告必须在 `docs/base-implementation-logs.md` 末尾追加同一任务的执行记录；没有代码修改时也要记录检查结果和未修改原因。
 
 除非用户明确要求，不执行 `git commit`、`git push`、分支切换、历史修改或清理用户文件。
 
 ### 1.3 执行日志规则（强制）
 
-`docs/base-implemtation-logs.md` 是本项目跨 Agent 的持续执行日志，采用 append-only 规则。任何实施、调试、验证、修复或文档任务都必须遵循以下顺序：
+`docs/base-implementation-logs.md` 是本项目跨 Agent 的持续执行日志，采用 append-only 规则。任何实施、调试、验证、修复或文档任务都必须遵循以下顺序：
 
 1. 开始前读取日志，并在本次工作记录中明确目标、范围、当前 Git 状态、关键假设、官方源码依据和验证计划。
 2. 执行中记录重要运行事实、错误原文、修复原因、测试环境、端口/进程、存档影响和用户明确延后的事项。
@@ -1263,7 +1263,7 @@ rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 1. D:\OneDrive\DST\.codex\AGENTS.md
 2. docs/base-design.md
 3. docs/base-implementation-plan.md 中的全局工程契约、test_mode 总体规格和 <WP>
-4. docs/base-implemtation-logs.md
+4. docs/base-implementation-logs.md
 
 先检查 Git 状态并保护用户已有修改。涉及 DST API、Prefab、Component、Brain、StateGraph、RPC、网络、世界生成或保存时，先查询 D:\OneDrive\DST\scripts，禁止修改该目录。
 
@@ -1271,7 +1271,7 @@ rg -n "SpawnPrefab\(|SetTile\(|TUNING\." scripts
 
 不要提前实现后续 WP，不要添加当前 WP 没有调用路径的空抽象，不要把任何具体 Mode 规则写入 Core。所有代码必须通过当前 WP 的验收项；无法运行验证时，明确列出未验证内容和风险，不得声称已经完成运行验证。
 
-完成后报告：修改内容、文件、官方源码依据、静态/运行验证、未验证项、Git 状态、建议中文 Conventional Commit，以及能否进入下一 WP；随后把同样的信息追加到 docs/base-implemtation-logs.md。不要 commit 或 push。
+完成后报告：修改内容、文件、官方源码依据、静态/运行验证、未验证项、Git 状态、建议中文 Conventional Commit，以及能否进入下一 WP；随后把同样的信息追加到 docs/base-implementation-logs.md。不要 commit 或 push。
 ```
 
 本文已经固定 WorldLayout 与本地测试环境。若实际官方 API、地图边界或运行结果与这些契约冲突，执行 Agent 应保留证据并停止相关危险路径，不得静默改写正式参数。

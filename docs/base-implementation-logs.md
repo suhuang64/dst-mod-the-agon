@@ -2,7 +2,7 @@
 
 > 本文件是 The Agon 跨任务、跨 AI Agent 的持续执行日志。
 >
-> 权威路径固定为 `docs/base-implemtation-logs.md`。文件名沿用项目约定的拼写（`implemtation`），不要另建一个同义日志文件。
+> 权威路径固定为 `docs/base-implementation-logs.md`。此前文件名拼写有误，本次已纠正；不要另建一个同义日志文件。
 >
 > 规则：本文件只允许在末尾追加；新 Agent 开始工作前必须读取本文件，并用当前仓库、官方源码和运行环境复核历史结论。日志中的测试证据不等同于尚未执行的验证。
 
@@ -179,7 +179,7 @@ ERROR: wagpunk_arena_manager expected to be able to calculate the set piece angl
  M modmain.lua
  M scripts/agon/debug/diagnostics.lua
  M scripts/components/agon_runtime.lua
-?? docs/base-implemtation-logs.md
+   ?? docs/base-implementation-logs.md
 ?? scripts/agon/core/
 ?? scripts/agon/modes/
 ```
@@ -197,7 +197,7 @@ feat(instance): 实现区域分配与基础实例生命周期
 ### 1.10 本次日志规则落地检查
 
 - 已在 `docs/base-design.md` 新增“工程执行记录与日志”章节；已在 `docs/base-implementation-plan.md` 的 Agent 开始前、完成报告、强制日志规则和任务模板中加入读取/追加要求。
-- 已用 `rg` 交叉确认 design、plan 和本文件均引用同一权威路径 `docs/base-implemtation-logs.md`。
+- 已用 `rg` 交叉确认 design、plan 和本文件均引用同一权威路径 `docs/base-implementation-logs.md`。
 - 已执行 `git -c safe.directory=D:/OneDrive/DST/the-agon -C D:/OneDrive/DST/the-agon diff --check`，未发现 whitespace error；仅有 Git 关于 LF/CRLF 转换的提示。
 - 已执行 `git status --short`，当前未提交范围与 1.9 列出的文件一致；没有执行 commit、push、分支操作或官方源码修改。
 
@@ -210,7 +210,7 @@ feat(instance): 实现区域分配与基础实例生命周期
   ```text
    M docs/base-design.md
    M docs/base-implementation-plan.md
-  ?? docs/base-implemtation-logs.md
+  ?? docs/base-implementation-logs.md
   ```
 
 - 当前文档任务尚未提交。若单独提交本次文档变更，建议使用：
@@ -222,3 +222,96 @@ feat(instance): 实现区域分配与基础实例生命周期
 ### 1.12 关于 1.10 状态描述的更正
 
 1.10 中“当前未提交范围与 1.9 列出的文件一致”是基于 WP2 提交前状态的记录，不能作为当前 Git 状态依据；该表述由 1.11 的 `HEAD=e55bd01` 和实际 `git status --short` 结果 supersede。后续 Agent 以最近的更正记录和当前命令输出为准。
+
+### 1.13 2026-09-01：WP2 跨重启存档恢复实服验证
+
+#### 目标与隔离范围
+
+- 本次专门补测此前未完成的 `c_save()` + 停止服务端 + 使用同一存档重启，以验证 WP2 的 `ABORT_ON_RESTART`、序号持久化、旧实例终止和 Zone 回收。
+- 开始时 `the-agon` 的 Git 基线为 `b6f339307154ffeea9032927410f6c55a62edd53`（`docs(base): 建立跨 Agent 执行日志规范`），工作树干净。
+- 为保护原 `D:/OneDrive/DST/klei/DoNotStarveTogether/Test/World01`，使用隔离临时根目录：
+
+  ```text
+  D:/OneDrive/DST/wp2-restart-test-20260901/DoNotStarveTogether/WP2Restart/World01
+  ```
+
+- 临时服务端使用游戏端口 `12002`、Master 端口 `11890`、Steam master 端口 `28020`、Steam authentication 端口 `9770`；只复制 Cluster 配置、权限文件和 `World01` 的 `server.ini`、`modoverrides.lua`、`leveldataoverride.lua`，没有复制原存档，也没有修改官方 `D:/OneDrive/DST/scripts`。
+- 原 `Test/World01` 服务端端口 `12000` 全程未停止、未复用；清理时仍可观察到端口 `12000` 由同名 DST 服务端监听（PID `18292`），本次没有操作该进程。
+
+#### 第一次启动、实例创建与保存
+
+- 临时服务端首次启动成功，服务端进程 PID `16452`；The Agon 输出 `LAYOUT_READY`（`400x400`）和 `CORE_READY`（`instance_count=0`、`zone_count=10`、`free_zone_count=10`）。
+- 官方仍输出两条既有 set-piece angle 告警：`hermitcrab_relocation_manager` 缺少 `monkeyqueen/monkeyportal`，以及 `wagpunk_arena_manager` 缺少 `hermitcrab_marker/beebox_hermit`；按 1.4 决策继续延后，不在本次处理。
+- 通过服务端控制台执行并记录：
+
+  ```text
+  CREATED:agon:1:1:small_01:PREPARING
+  START:true:nil:RUNNING:ACTIVE
+  ```
+
+- 执行 `c_save()` 成功，服务端输出 `Serializing world: session/094170EC991ECCB4/0000000003`。保存文件为：
+
+  ```text
+  D:/OneDrive/DST/wp2-restart-test-20260901/DoNotStarveTogether/WP2Restart/World01/save/session/094170EC991ECCB4/0000000003
+  ```
+
+  文件大小为 `1729589` bytes；对二进制文件做有界字符串检查，确认出现 `agon:1:1`、`next_sequence` 和 `ABORT_ON_RESTART`。这证明第一个运行中的实例以及重启策略确实写入了本次隔离存档。
+
+#### 停止、重启与恢复验证
+
+- 先确认 PID `16452` 的完整路径为 DST 的 `dontstarve_dedicated_server_nullrenderer_x64.exe`，再停止该精确 PID；端口 `12002` 随后释放。
+- 使用完全相同的临时根目录、Cluster、Shard 和端口第二次启动，服务端进程 PID `19120`，日志确认加载 `session/094170EC991ECCB4/0000000003`。
+- 第二次启动输出 `CORE_READY`：`instance_count=0`、`zone_count=10`、`free_zone_count=10`、`aborted_instance_count=1`。服务端控制台综合校验结果：
+
+  ```text
+  AFTER_RESTART:2:0:1:1:FREE:OLD=false:VALIDATE=true:nil
+  ```
+
+  字段含义依次为：`boot_generation=2`、当前实例数 `0`、下一序号 `1`、重启时中止的活动实例数 `1`、`small_01=FREE`、旧 ID `agon:1:1` 不存在、`ValidateCore=true`。
+- 重启后再次创建 TestMode，结果为：
+
+  ```text
+  NEXT_CREATE:agon:1:2:small_01:PREPARING
+  ```
+
+  证明 `next_sequence` 没有回退，且已被中止实例占用的 `small_01` 可安全复用。随后启动并销毁该验证实例，结果为：
+
+  ```text
+  CLEANUP_INSTANCE:START=true:nil:DESTROY=true:INSTANCE_DESTROYED:COUNT=0:ZONE=FREE
+  ```
+
+- 对第二次启动的 `server_log.txt` 检查，没有新的 The Agon Lua stack traceback、`attempt to call` 或未声明变量错误；两条官方 manager 告警仍存在，属于已登记的延后项。
+
+#### 清理、结果与限制
+
+- 测试结论：**通过**。WP2 当前实现能够在跨进程重启后识别并中止存档中的活动实例、延续实例序号、释放 Zone，并通过核心一致性校验。
+- 测试服务端 PID `19120` 已在确认完整路径后停止；端口 `12002`、`11890`、`9770` 均已无监听。
+- 已删除精确临时目录 `D:/OneDrive/DST/wp2-restart-test-20260901`；其中只有本次可重建的临时配置、日志和存档，不影响原 `Test/World01` 存档。原端口 `12000` 仍保持运行。
+- 本次没有真实客户端加入、双客户端并发、玩家恢复、跨 shard RPC 或地形/实体动态内容验证；这些仍需后续 WP 的人工/实服验收。
+- 执行中首次使用 `New-Item -LiteralPath` 遇到当前 PowerShell 不支持该参数，立即改为等价的 `-Path` 创建临时目录；不影响仓库和原存档。
+- 本次只追加本日志，没有修改 WP2 源码，没有 commit、push、分支切换或官方源码修改。测试完成后应再次执行 `git status --short` 和 `git diff --check`；若日志仍未提交，建议 Commit：
+
+  ```text
+  test(instance): 验证跨重启实例存档恢复
+  ```
+
+### 1.14 2026-09-01：修正执行日志文件名
+
+- 用户指出执行日志文件名中的 `implemtation` 拼写错误，要求统一改为 `implementation`。
+- 开始时仓库 HEAD 为 `b6f339307154ffeea9032927410f6c55a62edd53`，此前跨重启测试留下的未提交修改仅为旧日志文件本身；先读取 `.codex/AGENTS.md` 和完整日志，确认需要保留全部历史记录。
+- 将日志文件从旧文件名重命名为 `docs/base-implementation-logs.md`，并同步修正 `docs/base-design.md`、`docs/base-implementation-plan.md` 以及日志文件内的权威路径引用；没有改动历史结论、WP 实现或官方源码。
+- 用 `rg` 确认仓库内只保留正确的 `base-implementation-logs.md` 引用；`git diff --check` 未发现 whitespace error，仅有 Git 的 LF/CRLF 转换提示。
+- 结束时未执行 commit、push 或分支操作。预期 Git 状态为：
+
+  ```text
+   M docs/base-design.md
+   M docs/base-implementation-plan.md
+   D docs/[旧日志文件名]
+  ?? docs/base-implementation-logs.md
+  ```
+
+- 建议 Commit：
+
+  ```text
+  docs(base): 修正执行日志文件名
+  ```
