@@ -6,6 +6,7 @@ local ZoneManager = require("agon/core/zone_manager")
 local InstanceManager = require("agon/core/instance_manager")
 local ModeRegistry = require("agon/modes/mode_registry")
 local TestModeDefinition = require("agon/modes/test_mode/definition")
+local SceneService = require("agon/world/scene_service")
 
 local function GetShardId()
     if TheShard ~= nil and type(TheShard.GetShardId) == "function" then
@@ -62,6 +63,7 @@ local AgonRuntime = Class(function(self, inst)
     self.core_failure_code = nil
     self.zone_manager = nil
     self.mode_registry = nil
+    self.scene_service = nil
     self.instance_manager = nil
     self.saved_core = nil
 end)
@@ -170,6 +172,7 @@ function AgonRuntime:FailCore(code, message, context)
     self.core_failure_code = code
     self.zone_manager = nil
     self.mode_registry = nil
+    self.scene_service = nil
     self.instance_manager = nil
     Diagnostics.Record(self.diagnostics, code, message)
     Diagnostics.Log(code, AddLayoutContext(self, context), message)
@@ -207,11 +210,27 @@ function AgonRuntime:InitializeCore()
         )
     end
 
+    local scene_service, scene_code = SceneService.New(
+    {
+        world = self.inst,
+        map = GetMap(self),
+        layout = self.layout,
+        minimap = self.inst.minimap,
+    })
+    if scene_service == nil then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "SceneService initialization failed: " .. tostring(scene_code)
+        )
+    end
+
     local instance_manager, instance_code = InstanceManager.New(
     {
         shard_id = self.shard_id,
         zone_manager = zone_manager,
         mode_registry = mode_registry,
+        scene_service = scene_service,
+        world = self.inst,
     })
     if instance_manager == nil then
         return self:FailCore(
@@ -233,6 +252,7 @@ function AgonRuntime:InitializeCore()
 
     self.zone_manager = zone_manager
     self.mode_registry = mode_registry
+    self.scene_service = scene_service
     self.instance_manager = instance_manager
     self.core_status = "READY"
     self.core_failure_code = nil
@@ -252,7 +272,7 @@ function AgonRuntime:InitializeCore()
             instance_count = instance_summary.instance_count,
             aborted_instance_count = instance_summary.restart_aborted_count,
         },
-        "ZoneManager, InstanceManager and empty TestMode ready"
+        "ZoneManager, InstanceManager and TestMode scene services ready"
     )
     return true
 end
@@ -491,6 +511,13 @@ function AgonRuntime:DestroyInstance(instance_id, reason)
         return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
     end
     return self.instance_manager:Destroy(instance_id, reason)
+end
+
+function AgonRuntime:ApplyScene(instance_id, operation, reason)
+    if not self:IsReady() then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    return self.instance_manager:ApplyScene(instance_id, operation, reason)
 end
 
 function AgonRuntime:GetInstanceDebugData(instance_id)

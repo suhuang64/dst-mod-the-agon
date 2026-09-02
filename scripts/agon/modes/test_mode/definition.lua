@@ -1,4 +1,4 @@
--- WP2：使用 SMALL Zone 的空 TestMode 定义。
+-- WP3：使用 SMALL Zone 并接入场景计划的 TestMode 定义。
 
 local TestModeRuntime = require("agon/modes/test_mode/runtime")
 

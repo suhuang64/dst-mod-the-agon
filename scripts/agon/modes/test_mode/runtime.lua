@@ -1,4 +1,6 @@
--- WP2：不生成地形和实体的最小 TestMode runtime。
+-- WP3：通过 ScenePlan 驱动最小场景、实体和地形事务的 TestMode runtime。
+
+local ScenePlans = require("agon/modes/test_mode/scene_plans")
 
 local TestModeRuntime = {}
 TestModeRuntime.SCHEMA_VERSION = 1
@@ -8,6 +10,7 @@ local function AttachMethods(runtime)
     runtime.OnStart = TestModeRuntime.OnStart
     runtime.OnFinish = TestModeRuntime.OnFinish
     runtime.OnDestroy = TestModeRuntime.OnDestroy
+    runtime.CreateScenePlan = TestModeRuntime.CreateScenePlan
     runtime.OnSave = TestModeRuntime.OnSave
     return runtime
 end
@@ -25,9 +28,14 @@ function TestModeRuntime.New(instance, services)
         mode_id = "TEST_MODE",
         mode_version = 1,
         instance_id = instance.instance_id,
+        instance = instance,
         services = services or {},
         state = "CREATED",
     })
+end
+
+function TestModeRuntime.CreateScenePlan(self, context)
+    return ScenePlans.Create(context)
 end
 
 function TestModeRuntime.OnPrepare(self)

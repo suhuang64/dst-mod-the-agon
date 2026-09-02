@@ -312,6 +312,78 @@ feat(instance): 实现区域分配与基础实例生命周期
 
 - 建议 Commit：
 
+```text
+docs(base): 修正执行日志文件名
+```
+
+### 1.15 2026-09-01：WP3 场景计划、地形事务与实体资源隔离
+
+#### 执行范围与基线
+
+- 本次开始前已读取 `.codex/AGENTS.md`、`docs/base-design.md`、`docs/base-implementation-plan.md` 和本文件；以后仍按同一规则先读后改，并在本文件末尾追加记录。
+- 当前 `the-agon` HEAD 为 `e238d05ffea60535d39b61d6259c8dc88572009c`；开始 WP3 时工作树为此前 WP2 基线，结束时仅有本条 WP3 代码/文档变更，未执行 commit、push、分支切换或官方源码修改。
+- 本次按用户要求改用正式存档：`D:/OneDrive/DST/klei/DoNotStarveTogether/Test`，Shard 为 `World01`，服务端端口 `12000`，Master 端口 `11889`。启动参数为：
+
   ```text
-  docs(base): 修正执行日志文件名
+  -persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01
+  ```
+
+- 为使专服同时读取仓库中的官方脚本和游戏资源，启动工作目录使用了临时资源链接目录；持久化根始终是正式 `klei/Test`，没有复制或替换正式存档配置，也没有记录或暴露 Cluster Token。测试结束后临时目录已删除。
+
+#### WP3 实现内容
+
+- 新增 `ResourceScope`：统一管理 Task、Event、Entity、Cleanup 资源，支持关闭状态、generation、子 Scope、资源转移和快照。
+- 新增 `EntityRegistry` 与 `agon_instance_member`：为实例实体登记 Instance/Scope/generation、分类、Profile、父实体和 spawn source，并把外部 `onremove` 纳入资源回收。
+- 新增 `SpawnService`：集中使用 DST `SpawnPrefab`，通过 `entity_spawned` 事件捕获构造期间产生的子实体，再登记到实例 EntityRegistry。
+- 新增 `ScenePlan`、`TerrainService`、`SceneService`：场景计划声明式校验、Portal-relative Zone 边界校验、Tile 事务、Map/MiniMap layer rebuild、实体占用检测、移动/拒绝策略、提交/回滚、场景 revision 和销毁清场。
+- `TestMode` 新增初始场景、`BLOCKING_PATCH`、空地 `LIVE_PATCH`、占用拒绝和占用移动计划；增加 `agon.test.scene <instance_id> <operation>` 管理入口。
+- Instance/InstanceManager/AgonRuntime 已接入场景服务；销毁流程先清实体与地形，再释放 Scene/Root Scope 和 Zone。
+
+#### 官方 API 核对
+
+- 复核 `D:/OneDrive/DST/scripts/mainfunctions.lua` 中 `SpawnPrefab`/`SpawnPrefabFromSim` 的构造和 `entity_spawned` 事件行为。
+- 复核 `D:/OneDrive/DST/scripts/entityscript.lua` 中 `ListenForEvent`、`RemoveEventCallback`、Task、`Remove` 和 `IsValid` 的调用约定。
+- 复核 `D:/OneDrive/DST/scripts/components/map.lua` 的 Tile API，并参考现有 `trade-system/scripts/arena/arena_mechanism.lua` 的 `SetTile`、Map/MiniMap `RebuildLayer` 顺序；运行时地皮写入集中在 `TerrainService`。
+- 运行时 Portal 解析结果为 `portal_tile=(200,200)`、`400x400` 地图；Zone 中心使用 Portal-relative 偏移，例如 `small_01=(45,265)`、`small_02=(355,265)`。
+
+#### 发现并修复的实现问题
+
+- 首轮占用移动失败路径发现 `RollbackSceneTransaction` 错误引用不存在的 `SceneService.entity_registry`；已改为显式使用事务所属 Instance 的 EntityRegistry，并验证失败回滚能恢复中心 Tile 和实体位置。
+- 首轮占用移动计划继承整个安全区相机边界，而目标中心 Tile 会被改为 `IMPASSABLE`；最终锚点校验因此正确拒绝该计划。已仅调整 TestMode 的移动测试计划，使替换后的相机边界避开被封锁中心 Tile，保留最终可行走性约束。
+- 首轮全局校验发现已提交 ScenePlan 的 `expected_scene_revision` 是应用前置条件，不能在当前计划自检时当作过期条件；已让 `SceneService.Validate` 对当前计划执行结构/边界校验，而 `ApplyPlan` 仍严格校验 expected revision。
+
+#### 正式 Test/World01 最终实服证据
+
+- 启动日志输出 `LAYOUT_READY`：Portal Tile `(200,200)`、`map_width=400`、`map_height=400`；随后 `CORE_READY`：`instance_count=0`、`zone_count=10`、`free_zone_count=10`。
+- 双实例初始构建通过：`agon:1:1 -> small_01`、`agon:1:2 -> small_02`，两者均 `RUNNING`、`scene_revision=1`、EntityRegistry 各有 1 个测试花实体。
+- A 执行 `BLOCKING_PATCH` 成功：A revision `2`、目标 Tile 为 `10`（WOODFLOOR）；B revision 仍为 `1`、对应 Tile 为 `4`（DIRT），证明实例场景隔离。
+- A 执行空地 `LIVE_PATCH` 成功：revision `3`、目标 Tile 为 `12`（CHECKER），实体数仍为 `1`。
+- A 执行占用拒绝策略返回 `false:OCCUPIED_TILE`：revision 保持 `3`、中心 Tile 保持 `4`、实体仍为 `1`，证明拒绝路径不产生部分地形提交。
+- A 执行占用移动策略成功：返回 `true`，revision `4`，中心 Tile 为 `1`（IMPASSABLE），花实体被移动到 Tile `(49,265)`（中心 `x+4`），实体数仍为 `1`。
+- 两实例活动状态下 `ValidateCore()` 返回 `true:nil`。
+- 销毁 A 成功：A Zone 为 `FREE` 且 `ValidateZoneCleared=true`；B 仍存在且为 `RUNNING`、revision `1`、中心 Tile 为 `4`；销毁后再次 `ValidateCore()` 返回 `true:nil`。
+- 创建第三个实例后复用已释放槽位：`agon:1:3 -> small_01`；随后销毁 B/C，最终 `zones_free=10/10`、`instance_count=0`、`ValidateCore=true:nil`。
+
+#### 跨重启验证
+
+- 在正式 `Test/World01` 完成上述实例清场后停止精确测试进程，再用相同 Cluster/Shard/持久化根重启。
+- 重启后控制台结果为：
+
+  ```text
+  FINAL3_RESTART instances=0:zones_free=10/10:validate=true:nil
+  ```
+
+- 这证明本轮测试结束时没有残留活动 Instance，正式 Test 重启后 Zone 池从 `FREE` 开始，底座校验仍通过。此前 WP2 专门的活动实例 `c_save()` 跨重启恢复/中止测试仍以 1.13 为准；本条是 WP3 直接正式 Test 的重启复核。
+
+#### 静态检查、限制与清理
+
+- `git diff --check` 通过；输出仅为 Git 的 LF/CRLF 转换提示。
+- `scripts/agon` 和 `scripts/components` 中未发现 `GLOBAL`；运行时 `SpawnPrefab` 仅位于 `SpawnService`，`SetTile` 仅位于 `TerrainService`（另有既有 `lobby_service` 的初始化地形写入）。
+- 本次是无真实玩家客户端的专服运行验证，未覆盖真实双客户端加入、玩家状态恢复、跨 shard RPC 和 FEAST 玩法；这些按计划留给后续 WP/人工验收。
+- 两条官方 set-piece angle 报错仍出现：`hermitcrab_relocation_manager` 找不到 `monkeyqueen/monkeyportal`，`wagpunk_arena_manager` 找不到 `hermitcrab_marker/beebox_hermit`。按既有决定只记录、不在 WP3 处理。
+- 已停止本轮正式 Test 服务端，确认没有 `dontstarve_dedicated_server_nullrenderer_x64` 进程，端口 `12000`/`11889` 已释放；已删除本轮创建的临时启动目录，未触碰其指向的游戏资源。正式 `Test/World01` 的服务端日志按正常运行被更新保留。
+- 建议 WP3 Commit：
+
+  ```text
+  feat(scene): 实现实例场景事务与资源隔离
   ```

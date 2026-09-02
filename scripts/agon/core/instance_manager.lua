@@ -1,4 +1,4 @@
--- WP2：创建、索引和销毁 Instance；只有本模块推进 Instance 主生命周期。
+-- WP2/WP3：创建、索引、场景切换和销毁 Instance；只有本模块推进主生命周期。
 
 local Instance = require("agon/core/instance")
 
@@ -19,6 +19,8 @@ InstanceManager.ERROR_CODES =
     INVALID_INSTANCE_SNAPSHOT = "INVALID_INSTANCE_SNAPSHOT",
     INVALID_SEQUENCE = "INVALID_SEQUENCE",
     INSTANCE_INVARIANT_FAILED = "INSTANCE_INVARIANT_FAILED",
+    SCENE_APPLY_FAILED = "SCENE_APPLY_FAILED",
+    SCENE_RESET_FAILED = "SCENE_RESET_FAILED",
 }
 
 local function IsInteger(value)
@@ -35,6 +37,7 @@ local function AttachMethods(manager)
     manager.Count = InstanceManager.Count
     manager.Create = InstanceManager.Create
     manager.Start = InstanceManager.Start
+    manager.ApplyScene = InstanceManager.ApplyScene
     manager.Transition = InstanceManager.Transition
     manager.Fail = InstanceManager.Fail
     manager.Destroy = InstanceManager.Destroy
@@ -82,6 +85,8 @@ function InstanceManager.New(options)
         next_sequence = next_sequence,
         zone_manager = options.zone_manager,
         mode_registry = options.mode_registry,
+        scene_service = options.scene_service,
+        world = options.world,
         now_fn = options.now_fn,
         instances_by_id = {},
         instance_order = {},
@@ -166,6 +171,7 @@ function InstanceManager.Create(self, mode_id, userids)
         {
             now = GetNow(self),
             now_fn = self.now_fn,
+            owner = self.world,
         }
     )
     if instance == nil then
@@ -173,8 +179,23 @@ function InstanceManager.Create(self, mode_id, userids)
         return nil, instance_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
     end
 
+    if self.scene_service ~= nil then
+        local attached, attach_code = self.scene_service:AttachInstance(instance)
+        if not attached then
+            instance.root_scope:Close("scene_attach_failed")
+            self.zone_manager:ReleaseReservation(zone.zone_id, instance_id)
+            return nil, attach_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
+        end
+    end
+
     local prepared, prepare_code = instance:Prepare("create")
     if not prepared then
+        if self.scene_service ~= nil then
+            self.scene_service:DetachInstance(instance)
+        end
+        if instance.root_scope ~= nil and not instance.root_scope:IsClosed() then
+            instance.root_scope:Close("prepare_failed")
+        end
         local released, release_code = self.zone_manager:ReleaseReservation(
             zone.zone_id,
             instance_id
@@ -213,8 +234,36 @@ function InstanceManager.Start(self, instance_id, reason)
         return false, building_code
     end
 
+    if self.scene_service ~= nil then
+        local scene_built, scene_code = self.scene_service:ApplyModePlan(
+            instance,
+            "INITIAL",
+            reason or "start"
+        )
+        if not scene_built then
+            instance:Fail("initial_scene_failed")
+            if not self.scene_service:Reset(instance, "initial_scene_failed") then
+                self.zone_manager:Quarantine(
+                    instance.zone_id,
+                    instance.instance_id,
+                    "initial_scene_reset_failed:" .. tostring(scene_code)
+                )
+            else
+                self.zone_manager:Quarantine(
+                    instance.zone_id,
+                    instance.instance_id,
+                    "initial_scene_failed:" .. tostring(scene_code)
+                )
+            end
+            return false, scene_code or InstanceManager.ERROR_CODES.SCENE_APPLY_FAILED
+        end
+    end
+
     local started, start_code = instance:Start(reason or "start")
     if not started then
+        if self.scene_service ~= nil then
+            self.scene_service:Reset(instance, "instance_start_failed")
+        end
         self.zone_manager:Quarantine(
             instance.zone_id,
             instance.instance_id,
@@ -229,6 +278,9 @@ function InstanceManager.Start(self, instance_id, reason)
     )
     if not active then
         instance:Fail("zone_activate_failed")
+        if self.scene_service ~= nil then
+            self.scene_service:Reset(instance, "zone_activate_failed")
+        end
         self.zone_manager:Quarantine(
             instance.zone_id,
             instance.instance_id,
@@ -237,6 +289,57 @@ function InstanceManager.Start(self, instance_id, reason)
         return false, active_code
     end
     return true, start_code
+end
+
+function InstanceManager.ApplyScene(self, instance_id, plan_or_kind, reason)
+    local instance = self:Get(instance_id)
+    if instance == nil then
+        return false, InstanceManager.ERROR_CODES.INSTANCE_NOT_FOUND
+    end
+    if self.scene_service == nil then
+        return false, InstanceManager.ERROR_CODES.SCENE_APPLY_FAILED
+    end
+
+    local plan = plan_or_kind
+    if type(plan_or_kind) == "string" then
+        local built, build_code = self.scene_service:BuildPlan(
+            instance,
+            plan_or_kind,
+            reason or "scene_apply"
+        )
+        if built == nil then
+            return false, build_code
+        end
+        plan = built
+    end
+    if type(plan) ~= "table" then
+        return false, InstanceManager.ERROR_CODES.SCENE_APPLY_FAILED
+    end
+
+    local blocking = plan.execution_mode == "BLOCKING"
+    local transitioned = false
+    if blocking and instance.lifecycle_state == Instance.STATES.RUNNING then
+        local began, begin_code = instance:BeginTransition(reason or "scene_blocking")
+        if not began then
+            return false, begin_code
+        end
+        transitioned = true
+    end
+
+    local applied, apply_code, transaction = self.scene_service:ApplyPlan(instance, plan)
+    if not applied then
+        if transitioned and instance.lifecycle_state == Instance.STATES.TRANSITION then
+            instance:CompleteTransition("scene_rollback")
+        end
+        return false, apply_code
+    end
+    if transitioned then
+        local completed, complete_code = instance:CompleteTransition(reason or "scene_complete")
+        if not completed then
+            return false, complete_code
+        end
+    end
+    return true, nil, transaction
 end
 
 function InstanceManager.Transition(self, instance_id, next_state, reason)
@@ -302,6 +405,28 @@ function InstanceManager.Destroy(self, instance_id, reason)
             "mode_destroy_failed:" .. tostring(destroying_code)
         )
         return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+    end
+
+    if self.scene_service ~= nil then
+        local reset, reset_code = self.scene_service:Reset(instance, reason or "destroy")
+        if not reset then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "scene_reset_failed:" .. tostring(reset_code)
+            )
+            return false, InstanceManager.ERROR_CODES.SCENE_RESET_FAILED
+        end
+    elseif instance.root_scope ~= nil and not instance.root_scope:IsClosed() then
+        local scope_closed, scope_code = instance.root_scope:Close(reason or "destroy")
+        if not scope_closed then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "scope_cleanup_failed:" .. tostring(scope_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
     end
 
     local released, release_code = CleanupZone(self, instance)
@@ -417,6 +542,12 @@ function InstanceManager.Validate(self)
             return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
         end
         seen_zones[instance.zone_id] = true
+        if self.scene_service ~= nil then
+            local scene_valid, scene_code = self.scene_service:Validate(instance)
+            if not scene_valid then
+                return false, scene_code or InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+        end
     end
     return true
 end
@@ -447,17 +578,22 @@ function InstanceManager.GetDebugLines(self)
         local instance = self.instances_by_id[self.instance_order[index]]
         if instance ~= nil then
             local zone = self.zone_manager:Get(instance.zone_id)
+            local entity_count = instance.entity_registry ~= nil
+                and instance.entity_registry:Count()
+                or 0
             table.insert(
                 lines,
                 string.format(
-                    "instance_id=%s mode_id=%s mode_version=%s zone_id=%s zone_state=%s lifecycle=%s generation=%d",
+                    "instance_id=%s mode_id=%s mode_version=%s zone_id=%s zone_state=%s lifecycle=%s generation=%d scene_revision=%d entities=%d",
                     tostring(instance.instance_id),
                     tostring(instance.mode_id),
                     tostring(instance.mode_version),
                     tostring(instance.zone_id),
                     tostring(zone ~= nil and zone.state or nil),
                     tostring(instance.lifecycle_state),
-                    instance.generation
+                    instance.generation,
+                    instance.scene_revision,
+                    entity_count
                 )
             )
         end

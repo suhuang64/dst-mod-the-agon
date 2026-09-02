@@ -1,4 +1,7 @@
--- WP2：单局 Instance 的生命周期和最小可保存状态。
+-- WP2/WP3：单局 Instance 的生命周期、资源隔离和场景状态。
+
+local ResourceScope = require("agon/core/resource_scope")
+local EntityRegistry = require("agon/core/entity_registry")
 
 local Instance = {}
 
@@ -39,6 +42,8 @@ Instance.ERROR_CODES =
     MODE_RUNTIME_FAILED = "MODE_RUNTIME_FAILED",
     MODE_RUNTIME_REJECTED = "MODE_RUNTIME_REJECTED",
     ALREADY_DESTROYED = "ALREADY_DESTROYED",
+    SCOPE_NOT_READY = "SCOPE_NOT_READY",
+    SCENE_SERVICE_NOT_READY = "SCENE_SERVICE_NOT_READY",
 }
 
 local function IsInteger(value)
@@ -116,6 +121,80 @@ end
 
 function Instance.GetGeneration(self)
     return self.generation
+end
+
+function Instance.GetZone(self)
+    return self.zone
+end
+
+function Instance.GetRootScope(self)
+    return self.root_scope
+end
+
+function Instance.GetEntityRegistry(self)
+    return self.entity_registry
+end
+
+function Instance.CreateScope(self, name)
+    if self.root_scope == nil then
+        return nil, Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    return self.root_scope:CreateChild(name)
+end
+
+function Instance.DoTaskInTime(self, time, callback, ...)
+    if self.root_scope == nil or self.resource_owner == nil then
+        return nil, Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    return self.root_scope:DoTaskInTime(self.resource_owner, time, callback, ...)
+end
+
+function Instance.DoPeriodicTask(self, period, callback, initial_delay, ...)
+    if self.root_scope == nil or self.resource_owner == nil then
+        return nil, Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    return self.root_scope:DoPeriodicTask(
+        self.resource_owner,
+        period,
+        callback,
+        initial_delay,
+        ...
+    )
+end
+
+function Instance.ListenForEvent(self, event, callback, source, cleanup_policy, label)
+    if self.root_scope == nil or self.resource_owner == nil then
+        return nil, Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    return self.root_scope:ListenForEvent(
+        self.resource_owner,
+        event,
+        callback,
+        source,
+        cleanup_policy,
+        label
+    )
+end
+
+function Instance.Spawn(self, spec, scope)
+    if self.spawn_service == nil then
+        return nil, Instance.ERROR_CODES.SCENE_SERVICE_NOT_READY
+    end
+    return self.spawn_service:Spawn(self, spec, scope)
+end
+
+function Instance.ApplyScenePlan(self, plan)
+    if self.scene_service == nil then
+        return false, Instance.ERROR_CODES.SCENE_SERVICE_NOT_READY
+    end
+    return self.scene_service:ApplyPlan(self, plan)
+end
+
+function Instance.Validate(self)
+    if self.scene_service ~= nil then
+        return self.scene_service:Validate(self)
+    end
+    return self.entity_registry:Validate()
 end
 
 function Instance.IsDestroyed(self)
@@ -336,7 +415,21 @@ function Instance.GetSnapshot(self)
         scene_revision = self.scene_revision,
         failure_reason = self.failure_reason,
         result = CopyValue(self.result),
+        scene_plan = CopyValue(self.scene_plan),
+        scene_transactions = {},
     }
+
+    if self.scene_service ~= nil then
+        local scene_snapshot = self.scene_service:GetSnapshot(self)
+        if type(scene_snapshot) == "table" then
+            snapshot.scene = scene_snapshot
+        end
+    else
+        snapshot.scope = self.root_scope ~= nil and self.root_scope:GetSnapshot() or nil
+        snapshot.entities = self.entity_registry ~= nil
+            and self.entity_registry:GetSnapshot()
+            or nil
+    end
 
     if self.mode_runtime ~= nil and type(self.mode_runtime.OnSave) == "function" then
         local ok, mode_state = ProtectedCall(self.mode_runtime.OnSave, self.mode_runtime)
@@ -357,8 +450,18 @@ local function AttachMethods(instance)
     instance.GetId = Instance.GetId
     instance.GetModeId = Instance.GetModeId
     instance.GetZoneId = Instance.GetZoneId
+    instance.GetZone = Instance.GetZone
     instance.GetLifecycleState = Instance.GetLifecycleState
     instance.GetGeneration = Instance.GetGeneration
+    instance.GetRootScope = Instance.GetRootScope
+    instance.GetEntityRegistry = Instance.GetEntityRegistry
+    instance.CreateScope = Instance.CreateScope
+    instance.DoTaskInTime = Instance.DoTaskInTime
+    instance.DoPeriodicTask = Instance.DoPeriodicTask
+    instance.ListenForEvent = Instance.ListenForEvent
+    instance.Spawn = Instance.Spawn
+    instance.ApplyScenePlan = Instance.ApplyScenePlan
+    instance.Validate = Instance.Validate
     instance.IsDestroyed = Instance.IsDestroyed
     instance.IsFailed = Instance.IsFailed
     instance.CanTransition = Instance.CanTransition
@@ -396,6 +499,7 @@ function Instance.New(instance_id, definition, zone, options)
         mode_id = definition.mode_id,
         mode_version = definition.mode_version,
         zone_id = zone.zone_id,
+        zone = zone,
         lifecycle_state = Instance.STATES.CREATED,
         created_at = now,
         state_entered_at = now,
@@ -404,6 +508,8 @@ function Instance.New(instance_id, definition, zone, options)
         participant_groups = {},
         services = {},
         scene_revision = 0,
+        scene_plan = nil,
+        scene_transactions = {},
         result = nil,
         failure_reason = nil,
         definition = definition,
@@ -411,7 +517,23 @@ function Instance.New(instance_id, definition, zone, options)
         finish_called = false,
         destroy_called = false,
         now_fn = options.now_fn,
+        resource_owner = options.owner,
     }
+    local root_scope, scope_code = ResourceScope.New(
+    {
+        instance_id = instance_id,
+        scope_id = instance_id .. ":scope:root",
+    })
+    if root_scope == nil then
+        return nil, scope_code or Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    instance.root_scope = root_scope
+    local entity_registry, registry_code = EntityRegistry.New(instance_id)
+    if entity_registry == nil then
+        root_scope:Close("entity_registry_failed")
+        return nil, registry_code or Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    instance.entity_registry = entity_registry
     return AttachMethods(instance)
 end
 

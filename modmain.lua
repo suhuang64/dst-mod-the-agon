@@ -96,14 +96,14 @@ if GetModConfigData("enable_agon") == true then
     RegisterAgonAdminCommand(
         "agon.test.create",
         {},
-        "创建一个不构建地形的空 TestMode Instance。",
+        "创建一个尚未启动的 TestMode Instance。",
         function(runtime)
             local instance, code = runtime:CreateInstance("TEST_MODE")
             if instance == nil then
                 Diagnostics.Log(
                     code,
                     { shard_id = runtime.shard_id, operation = "test_create" },
-                    "empty TestMode creation failed"
+                    "TestMode creation failed"
                 )
                 return
             end
@@ -119,7 +119,7 @@ if GetModConfigData("enable_agon") == true then
                     lifecycle_state = instance.lifecycle_state,
                     lifecycle = instance.lifecycle_state,
                 },
-                "empty TestMode instance created"
+                "TestMode instance created"
             )
         end
     )
@@ -127,7 +127,7 @@ if GetModConfigData("enable_agon") == true then
     RegisterAgonAdminCommand(
         "agon.test.start",
         { "instance_id" },
-        "启动一个已经创建的空 TestMode Instance。",
+        "构建并启动一个已经创建的 TestMode Instance。",
         function(runtime, params)
             local started, code = runtime:StartInstance(params.instance_id, "test_start")
             if not started then
@@ -152,6 +152,29 @@ if GetModConfigData("enable_agon") == true then
                 },
                 code == "ALREADY_STARTED" and "TestMode instance already running"
                     or "TestMode instance started"
+            )
+        end
+    )
+
+    RegisterAgonAdminCommand(
+        "agon.test.scene",
+        { "instance_id", "operation" },
+        "对 TestMode 执行场景计划：BLOCKING_PATCH、LIVE_PATCH_EMPTY、LIVE_PATCH_OCCUPIED_REJECT 或 LIVE_PATCH_OCCUPIED_MOVE。",
+        function(runtime, params)
+            local applied, code = runtime:ApplyScene(
+                params.instance_id,
+                params.operation,
+                "test_scene"
+            )
+            Diagnostics.Log(
+                applied and Diagnostics.RESULTS.SCENE_APPLIED or code,
+                {
+                    shard_id = runtime.shard_id,
+                    operation = "test_scene",
+                    instance_id = params.instance_id,
+                    scene_operation = params.operation,
+                },
+                applied and "TestMode scene plan applied" or "TestMode scene plan failed"
             )
         end
     )
