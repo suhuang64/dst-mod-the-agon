@@ -3,9 +3,40 @@
 local ScenePlans = require("agon/modes/test_mode/scene_plans")
 local TestModeDecisions = require("agon/modes/test_mode/decisions")
 local TestModeEffects = require("agon/modes/test_mode/effects")
+local PlayerProfile = require("agon/player/player_profile")
 
 local TestModeRuntime = {}
 TestModeRuntime.SCHEMA_VERSION = 1
+
+local TEST_PLAYER_PROFILE = PlayerProfile.New(
+{
+    profile_id = "TEST_MODE_PLAYER",
+    version = 1,
+    mode_id = "TEST_MODE",
+    appearance_policy = PlayerProfile.APPEARANCE_POLICIES.PRESERVE,
+    base_stats =
+    {
+        max_health = 150,
+        health = 150,
+        max_hunger = 150,
+        hunger = 150,
+        max_sanity = 200,
+        sanity = 200,
+        temperature = 25,
+        moisture = 0,
+    },
+    movement_speed = 1.25,
+    starting_items =
+    {
+        { prefab = "test_mode_token", count = 1, slot = 1 },
+    },
+    skills = { "test_mode_unified_skill" },
+    skill_points = 0,
+    allowed_abilities = { "test_mode_unified_ability" },
+    disabled_abilities = { "original_character_ability" },
+    temporary_components = { "test_mode_rules" },
+    metadata = { schema_version = 1, purpose = "wp7_sandbox_diagnostics" },
+})
 
 local function AttachMethods(runtime)
     runtime.OnPrepare = TestModeRuntime.OnPrepare
@@ -17,6 +48,7 @@ local function AttachMethods(runtime)
     runtime.GetService = TestModeRuntime.GetService
     runtime.GetGroup = TestModeRuntime.GetGroup
     runtime.GetPhase = TestModeRuntime.GetPhase
+    runtime.GetPlayerProfile = TestModeRuntime.GetPlayerProfile
     runtime.OnSave = TestModeRuntime.OnSave
     return runtime
 end
@@ -55,6 +87,13 @@ end
 
 function TestModeRuntime.GetPhase(self)
     return self.phase
+end
+
+function TestModeRuntime.GetPlayerProfile(self, participant)
+    if participant == nil or TEST_PLAYER_PROFILE == nil then
+        return nil
+    end
+    return PlayerProfile.Copy(TEST_PLAYER_PROFILE)
 end
 
 function TestModeRuntime.CreateGroupVote(self, decision_id, candidates, options)

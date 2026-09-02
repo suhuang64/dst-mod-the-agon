@@ -32,6 +32,7 @@ Participant.ERROR_CODES =
     INVALID_TRANSITION = "INVALID_PARTICIPANT_TRANSITION",
     PLAYER_USERID_MISMATCH = "PLAYER_USERID_MISMATCH",
     PARTICIPANT_LEFT = "PARTICIPANT_LEFT",
+    INVALID_SANDBOX_TRANSACTION = "INVALID_SANDBOX_TRANSACTION",
 }
 
 Participant.TRANSITIONS =
@@ -137,6 +138,18 @@ end
 
 function Participant.GetPlayer(self)
     return self.player_ref
+end
+
+function Participant.GetSandboxTransactionId(self)
+    return self.sandbox_transaction_id
+end
+
+function Participant.SetSandboxTransactionId(self, transaction_id)
+    if transaction_id ~= nil and not IsNonEmptyString(transaction_id) then
+        return false, Participant.ERROR_CODES.INVALID_SANDBOX_TRANSACTION
+    end
+    self.sandbox_transaction_id = transaction_id
+    return true
 end
 
 function Participant.GetGroupIds(self)
@@ -372,6 +385,8 @@ local function AttachMethods(participant)
     participant.GetState = Participant.GetState
     participant.GetGeneration = Participant.GetGeneration
     participant.GetPlayer = Participant.GetPlayer
+    participant.GetSandboxTransactionId = Participant.GetSandboxTransactionId
+    participant.SetSandboxTransactionId = Participant.SetSandboxTransactionId
     participant.GetGroupIds = Participant.GetGroupIds
     participant.HasGroup = Participant.HasGroup
     participant.AddGroupId = Participant.AddGroupId

@@ -231,6 +231,15 @@ if GetModConfigData("enable_agon") == true then
     )
 
     RegisterAgonAdminCommand(
+        "agon.test.wp7",
+        {},
+        "运行 The Agon WP7 的玩家沙箱、统一 Profile、恢复、重试和故障隔离诊断。",
+        function(runtime)
+            runtime:RunWP7Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
         "agon.destroy_instance",
         { "instance_id" },
         "按正式销毁 pipeline 销毁一个 The Agon Instance。",

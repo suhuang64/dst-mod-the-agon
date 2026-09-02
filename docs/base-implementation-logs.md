@@ -727,3 +727,60 @@ docs(base): 修正执行日志文件名
 - 随后执行 `c_shutdown()`，World01 完成两次序列化并正常退出；复核 `PROCESS_REMAINS=False`、`PORTS_REMAINS=False`。最终日志未新增 `LUA ERROR`、`stack traceback`、`bad argument` 或 `attempt to`。
 - `git diff --check` 通过；仅有 Git 关于工作树 LF/CRLF 转换的提示。PATH 中 `lua`/`luac` 均缺失，未全局安装 parser；Lua 模块加载和 API 兼容性由官方专服承担运行验证。
 - 1.21 和本条记录均为 append-only；前述 WP6 实测失败及其原因没有覆盖或删除，后续 Agent 应优先参考这些已记录的真实错误。
+
+### 1.23 2026-09-02：WP7 PlayerSandbox 实施启动记录
+
+#### 任务范围与当前状态
+
+- 进入 WP7 PlayerSandbox 与 PlayerProfile；目标是为 Participant 建立 `NEW → CAPTURED → SANDBOXED → RESTORING → RESTORED → COMMITTED` 事务，并在快照验证成功前禁止清空原状态。
+- 当前仓库为 `D:\OneDrive\DST\the-agon`；开始检查时 `git status --short` 无输出，当前 HEAD 为 `dd01264 feat(profile): 增加实例级实体与物品定制框架`。本轮不执行 commit、push、分支切换或历史改写。
+- 本轮预计新增 `scripts/agon/player/` 下的 PlayerProfile、StateAdapterRegistry、Inventory/SurvivalStats/SkillTree/Character adapters、SandboxService，并把 `player_sandbox` 接入 Instance Common Services、Participant、TestMode 和 WP7 admin diagnostics；同步保留 WP5/WP6 回归路径。
+
+#### 官方源码依据与安全边界
+
+- 已核对只读官方源码 `D:\OneDrive\DST\scripts\components\inventory.lua`：`OnSave` 覆盖 `items/equip/activeitem`，且通过 `GetSaveRecord` 返回实体引用；`OnLoad` 使用 `SpawnSaveRecord` 后再 `GiveItem/Equip`，不能把一个暂存表直接当作安全的在线恢复方案。
+- 已核对 `health.lua`、`hunger.lua`、`sanity.lua`、`temperature.lua`、`moisture.lua` 的保存字段和恢复 setter；已核对 `skilltreeupdater.lua` 的 `save_enabled`、技能选择、XP、编码数据和 client/server activation 逻辑，技能树在握手完成前不能覆盖长期客户端状态。
+- 已核对 `player_common.lua`、`petleash.lua`、`locomotor.lua` 的角色保存、宠物/跟随者和速度相关边界。真实玩家 live mutation 默认需要显式安全开关且适配器必须声明可恢复；未达到条件时拒绝进入，而不是清空后“尝试运行”。
+- TestMode 采用带完整合成状态的测试玩家验证库存（背包/装备/鼠标物品/容器）、Stats、技能树、角色资源/外观、统一 Profile、退出恢复、同 transaction 重试幂等、恢复失败隔离和 Instance 清理；真实双客户端/UI、跨 shard、重启期间玩家存档恢复仍不在本次冒充完成范围。
+
+#### 验证计划
+
+- 先做 `rg`、`git diff --check` 和可用的静态 Lua 模块检查；PATH 没有 `lua`/`luac` 时不全局安装工具。
+- 再使用官方 `Test/World01`、World01 专服端口 `12000`/`11889` 运行 `agon.test.wp7`，并回归 `agon.test.wp5`、`agon.test.wp6`、`ValidateCore` 和实例/Zone 清理；记录 Cluster/World、存档影响、进程收尾和已知官方 set-piece warnings。
+
+### 1.24 2026-09-02：WP7 诊断失败定位与测试修正
+
+- 第一次执行 WP7 时，预期注入的恢复失败没有进入可 inspect 状态。原因是诊断玩家仍带有 `agon_sandbox_test=true`，服务继续走合成玩家路径，不会触发缺少 live component 的确定性失败；诊断已在注入故障前显式切换为非合成玩家并清除状态，恢复重试前再还原合成测试标记。
+- 第二次执行 WP7 时出现 `same transaction restore retry was not idempotent result=true code=nil state=COMMITTED attempts=2 equal=false inventory=false stats=false skilltree=false character=false speed=false`。原因不是恢复事务复制物品，而是 `MakeTestPlayer` 返回的“原始基线”与玩家当前状态共用同一个 table；进入沙箱时适配器清理直接改写了基线，比较对象已不是进入前状态。
+- 已将 WP7 测试基线改为 `Util.CopyData(state)` 的独立深拷贝。该修正仅影响诊断基线，不改变正式玩家状态适配器的事务语义；随后重启专服进行完整复测。
+- 本条为 append-only 记录；没有执行 commit、push 或历史改写。
+
+### 1.25 2026-09-02：WP7 官方 Test/World01 完整验收
+
+#### 实现范围
+
+- 新增 `scripts/agon/player/player_profile.lua`、`sandbox_service.lua`、`state_adapter_registry.lua` 及 `adapters/` 下的 Inventory、SurvivalStats、SkillTree、默认 Character 适配器和共享工具。
+- `player_sandbox` 已接入 Common Service Registry；Participant 新增 sandbox transaction ID；InstanceManager 在玩家附加、断线、移除和 Instance 清理时接入 Capture/Validate/Clean/Apply/Restore pipeline；TestMode 提供统一 PlayerProfile 和 WP7 admin/runtime diagnostics。
+- SandboxService 状态包括 `NEW`、`CAPTURED`、`SANDBOXED`、`RESTORING`、`RESTORED`、`COMMITTED`、`RESTORE_PENDING` 和 `RESTORE_BLOCKED`；真实玩家 live mutation 默认关闭，SkillTree handshake 和角色恢复能力是硬门。
+
+#### 官方专服证据
+
+- 启动命令使用官方 `dontstarve_dedicated_server_nullrenderer_x64.exe`，Cluster=`Test`、Shard/World=`World01`，游戏版本 `747465`、Build `4239`；服务端口 `12000`，Master shard 端口 `11889`。日志出现 `CORE_READY`、`layout_status=READY`、`core_status=READY`。
+- `TheWorld.components.agon_runtime:RunWP7Diagnostics()` 输出：`[TheAgon] [WP7_TEST_PASS] ... WP7 player sandbox diagnostics passed`。
+- 同一进程回归 `RunWP5Diagnostics()` 输出 `WP5_TEST_PASS`，回归 `RunWP6Diagnostics()` 输出 `WP6_TEST_PASS`；`print(...ValidateCore())` 输出 `WP7_VALIDATE_CORE=true`。
+- WP7 诊断实际覆盖：背包/装备/鼠标物品/嵌套容器、生命/饥饿/理智/温度/潮湿、技能 XP/点数/已激活技能/编码数据、角色资源/跟随者/宠物/召唤物/组件/外观、统一 Profile、正常恢复、重复恢复、同 transaction 失败重试、失败玩家隔离、无效技能树在清理前拒绝和 Instance/Zone 清理。
+
+#### 收尾与边界
+
+- 执行 `c_shutdown()` 后 World01 完成序列化快照 `#23` 和 `#24`，服务器正常退出；复核 `dontstarve_dedicated_server_nullrenderer_x64` 进程不存在，`12000/11889` 无监听端口。
+- 日志只保留官方已知的两条 set-piece angle 错误（`hermitcrab_relocation_manager`、`wagpunk_arena_manager`），仍按既有决定延后；本次未修改官方源码或这些 warning 的触发条件。未发现新的 `LUA ERROR`、`stack traceback`、`bad argument` 或 `attempt to`。
+- 该验收仍是无真实客户端的服务端合成状态测试；真实双客户端/UI、第二 shard、断线后重新绑定真实玩家对象及重启中止时的真实玩家存档恢复未完成，必须在 WP8–WP10/WP9 对应阶段补测。WP7 不因此冒充 Base Release Gate。
+- `git diff --check` 通过；PATH 中 `lua`、`luac`、`stylua` 均缺失，未全局安装解析器；Lua 模块加载、API 兼容性和本次运行路径由官方专服验证。当前仍不执行 commit、push。
+
+### 1.26 2026-09-02：WP7 未适配角色硬门与最终复测
+
+- 末次代码审查发现默认 `character:*` 通配注册会让未适配角色绕过 Character adapter 选择。已改为从官方运行时 `DST_CHARACTERLIST`（无该全局时使用与当前官方源码一致的 19 个角色回退列表）逐项绑定默认 Character adapter；额外角色只能通过 `options.character_adapters` 显式注册，未知角色在 Capture 阶段返回 `INVALID_PLAYER_CHARACTER_ADAPTER`，不会进入清理状态。
+- WP7 诊断新增未知角色用例：附加失败、Participant 进入 `DISCONNECTED`、玩家原始合成状态保持不变，并能独立移除；这与无效 SkillTree 的“验证失败前不清理”用例同时覆盖。
+- 修改后重新启动官方专服 `Test/World01`（版本 `747465`、Build `4239`，端口 `12000`、Master shard `11889`），日志确认 `LAYOUT_READY` 和 `CORE_READY`，并输出 `WP7_TEST_PASS`、`WP5_TEST_PASS`、`WP6_TEST_PASS` 以及 `WP7_VALIDATE_CORE=true`。
+- 末次 `c_shutdown()` 正常完成序列化快照 `#25`、`#26` 并退出；复核无 `dontstarve_dedicated_server_nullrenderer_x64` 进程、无 `12000/11889` 监听端口。末次日志仍只有既知的 `hermitcrab_relocation_manager` 与 `wagpunk_arena_manager` set-piece angle 错误，没有新增 Lua/runtime 错误。
+- `git diff --check` 通过；没有全局安装 Lua 工具。当前仍不执行 commit、push；本条继续遵守 append-only 记录规则。

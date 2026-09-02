@@ -194,6 +194,7 @@ function InstanceManager.AddParticipant(self, instance_id, userid, options)
             role = options.role,
             group_ids = options.group_ids,
             player_ref = options.player_ref,
+            sandbox_transaction_id = options.sandbox_transaction_id,
         }
     )
     if participant == nil then
@@ -223,6 +224,31 @@ function InstanceManager.AttachPlayer(self, instance_id, userid, player)
     if not attached then
         return false, attach_code
     end
+    local sandbox = instance:GetService("player_sandbox")
+    if sandbox ~= nil then
+        local mode_runtime = instance.mode_runtime
+        local profile = mode_runtime ~= nil
+            and type(mode_runtime.GetPlayerProfile) == "function"
+            and mode_runtime:GetPlayerProfile(participant)
+            or nil
+        if profile == nil then
+            participant:MarkDisconnected(
+                "player_profile_unavailable",
+                instance.generation,
+                GetNow(self)
+            )
+            return false, "PLAYER_PROFILE_UNAVAILABLE"
+        end
+        local entered, sandbox_code = sandbox:Enter(participant, player, profile)
+        if not entered then
+            participant:MarkDisconnected(
+                "player_sandbox_enter_failed",
+                instance.generation,
+                GetNow(self)
+            )
+            return false, sandbox_code or "PLAYER_SANDBOX_ENTER_FAILED"
+        end
+    end
     return true
 end
 
@@ -233,6 +259,12 @@ function InstanceManager.MarkDisconnected(self, userid, reason)
     end
     local instance = self:Get(participant.instance_id)
     local generation = instance ~= nil and instance.generation or participant.generation
+    if instance ~= nil then
+        local sandbox = instance:GetService("player_sandbox")
+        if sandbox ~= nil then
+            sandbox:MarkDisconnected(participant, reason or "player_disconnected")
+        end
+    end
     return participant:MarkDisconnected(reason, generation, GetNow(self))
 end
 
@@ -242,6 +274,20 @@ function InstanceManager.RemoveParticipant(self, instance_id, userid, reason)
     if instance == nil or participant == nil
         or participant.instance_id ~= instance_id then
         return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
+    end
+    local restore_pending_code = nil
+    local sandbox = instance:GetService("player_sandbox")
+    if sandbox ~= nil then
+        local restored, restore_code = sandbox:RestoreOriginal(
+            participant,
+            nil,
+            reason or "participant_removed"
+        )
+        if not restored then
+            -- 玩家恢复失败不能阻塞其他 Participant 的索引和 Instance 清理；
+            -- SandboxService 会保留同一 transaction 供 inspect/retry。
+            restore_pending_code = restore_code
+        end
     end
     local left, left_code = participant:MarkLeft(
         reason or "participant_removed",
@@ -261,7 +307,7 @@ function InstanceManager.RemoveParticipant(self, instance_id, userid, reason)
     if self.participants_by_userid[userid] == participant then
         self.participants_by_userid[userid] = nil
     end
-    return true
+    return true, restore_pending_code
 end
 
 function InstanceManager.ResolveInstance(self, subject)
@@ -880,6 +926,13 @@ function InstanceManager.Validate(self)
                 or service == nil
                 or service.service_id ~= service_id then
                 return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+            if type(service.Validate) == "function" then
+                local service_valid, service_code = service:Validate()
+                if not service_valid then
+                    return false, service_code
+                        or InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+                end
             end
         end
         if self.scene_service ~= nil then

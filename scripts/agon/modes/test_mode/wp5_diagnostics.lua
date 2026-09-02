@@ -17,6 +17,61 @@ local function MakeTestPlayer(userid)
     return
     {
         userid = userid,
+        agon_sandbox_test = true,
+        agon_sandbox_state =
+        {
+            inventory =
+            {
+                slots =
+                {
+                    [1] = { prefab = "test_original_food", count = 3 },
+                    [2] =
+                    {
+                        prefab = "test_original_bag",
+                        contents = { [1] = { prefab = "test_nested_item", count = 2 } },
+                    },
+                },
+                equipment =
+                {
+                    body = { prefab = "test_original_backpack" },
+                    hands = { prefab = "test_original_tool" },
+                },
+                active_item = { prefab = "test_original_active" },
+                containers = { test_container = { slots = { [1] = { prefab = "test_container_item" } } } },
+            },
+            survival_stats =
+            {
+                health = { current = 73, max = 100, penalty = 0.1, invincible = false },
+                hunger = { current = 61, max = 100 },
+                sanity = { current = 42, max = 100, mode = 0, sane = true },
+                temperature = { current = 18 },
+                moisture = { current = 12, max = 100 },
+                temporary = { buff = "test_buff" },
+            },
+            skilltree =
+            {
+                handshake_complete = true,
+                xp = 321,
+                points = 2,
+                activated_skills = { "original_skill_a", "original_skill_b" },
+                selection = { 3, 5 },
+                encoded_data = "original_skill_blob",
+                character_prefab = "wilson",
+            },
+            character =
+            {
+                prefab = "wilson",
+                appearance = { skin = "test_skin", build = "test_build" },
+                resources = { sanity_boost = 4, character_meter = 8 },
+                followers = { "test_follower" },
+                pets = { "test_pet" },
+                summoned = { "test_summoned" },
+                components = { character_component = "original" },
+                abilities = { "original_character_ability" },
+                movement_speed = 1,
+            },
+            movement_speed = 1,
+        },
         IsValid = function()
             return true
         end,
@@ -143,13 +198,13 @@ function Wp5Diagnostics.Run(runtime)
 
         local services_a, service_count_a = CountServices(instance_a)
         local services_b, service_count_b = CountServices(instance_b)
-        Check(service_count_a == 6 and service_count_b == 6
+        Check(service_count_a == 7 and service_count_b == 7
             and services_a.phase and services_a.clock
             and services_a.decision and services_a.effects and services_a.score
-            and services_a.entity_profiles
+            and services_a.entity_profiles and services_a.player_sandbox
             and services_b.phase and services_b.clock
             and services_b.decision and services_b.effects and services_b.score
-            and services_b.entity_profiles,
+            and services_b.entity_profiles and services_b.player_sandbox,
             "declared Common Services were not isolated per Instance")
 
         local started_a, start_a_code = runtime:StartInstance(

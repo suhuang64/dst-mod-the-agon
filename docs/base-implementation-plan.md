@@ -1036,6 +1036,14 @@ scripts/agon/modes/test_mode/runtime.lua
 - 一个玩家恢复失败不阻塞其他玩家和 Zone 清理。
 - 未适配角色被拒绝进入，不在已知不安全状态下“尝试运行”。
 
+### WP7 当前状态（2026-09-02）
+
+- 状态：PlayerSandbox、PlayerProfile、StateAdapterRegistry 及 Inventory/SurvivalStats/SkillTree/Character adapters 已实现，并已接入 Participant、InstanceManager、Common Services 和 TestMode 诊断；默认 Character adapter 仅绑定官方已知角色，其他角色必须显式注册适配器。
+- 官方专服 `Test/World01` 已通过 `WP7_TEST_PASS`：合成测试玩家的背包/装备/鼠标物品/容器、Stats、技能树、角色资源与外观、统一 Profile、正常恢复、重复恢复、恢复失败后的同 transaction 重试、失败玩家隔离和 Instance 清理均通过。
+- 回归：同一专服的 `WP5_TEST_PASS`、`WP6_TEST_PASS` 和 `ValidateCore=true` 均通过；`c_shutdown()` 完成序列化并正常退出，端口和进程均已清理。
+- 安全边界：真实玩家 live mutation 默认关闭；未完成明确的客户端/服务端握手、角色恢复适配或人工安全开关时拒绝进入。当前验收仍是无真实客户端的服务端合成状态测试，尚未覆盖真实双客户端/UI、跨 shard、断线后重新绑定玩家对象和重启中止时的真实玩家存档恢复；这些必须在 WP8–WP10/WP9 对应阶段补测。
+- 记录：执行细节、两次测试诊断问题及修正原因见 `docs/base-implementation-logs.md` 的 1.23–1.25；WP1 两条 set-piece angle 错误继续按既有决定延后。
+
 ### 建议 Commit
 
 ```text

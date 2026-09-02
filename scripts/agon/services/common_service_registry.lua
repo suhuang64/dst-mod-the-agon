@@ -6,6 +6,7 @@ local DecisionService = require("agon/services/decision_service")
 local EffectService = require("agon/services/effect_service")
 local ScoreLedger = require("agon/services/score_ledger")
 local EntityProfileService = require("agon/services/entity_profile_service")
+local SandboxService = require("agon/player/sandbox_service")
 
 local CommonServiceRegistry = {}
 
@@ -86,6 +87,15 @@ local SERVICE_DEFINITIONS =
         dependencies = {},
         Create = function(instance, services, options)
             return EntityProfileService.New(instance, services, options)
+        end,
+    },
+    player_sandbox =
+    {
+        service_id = "player_sandbox",
+        version = 1,
+        dependencies = {},
+        Create = function(instance, services, options)
+            return SandboxService.New(instance, services, options)
         end,
     },
 }

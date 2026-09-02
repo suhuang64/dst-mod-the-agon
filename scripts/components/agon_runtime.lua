@@ -15,6 +15,7 @@ local Classified = require("agon/net/classified")
 local Wp4Diagnostics = require("agon/modes/test_mode/wp4_diagnostics")
 local Wp5Diagnostics = require("agon/modes/test_mode/wp5_diagnostics")
 local Wp6Diagnostics = require("agon/modes/test_mode/wp6_diagnostics")
+local Wp7Diagnostics = require("agon/modes/test_mode/wp7_diagnostics")
 
 local function IsNonEmptyString(value)
     return type(value) == "string" and value ~= ""
@@ -826,6 +827,23 @@ function AgonRuntime:RunWP6Diagnostics()
             core_status = self.core_status,
         },
         passed and "WP6 entity profile diagnostics passed" or tostring(code)
+    )
+    return passed, code
+end
+
+function AgonRuntime:RunWP7Diagnostics()
+    if not self:IsReady() then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local passed, code = Wp7Diagnostics.Run(self)
+    Diagnostics.Log(
+        passed and Diagnostics.RESULTS.WP7_TEST_PASS or code,
+        {
+            shard_id = self.shard_id,
+            operation = "wp7_diagnostics",
+            core_status = self.core_status,
+        },
+        passed and "WP7 player sandbox diagnostics passed" or tostring(code)
     )
     return passed, code
 end

@@ -16,6 +16,7 @@ local TestModeDefinition =
         "effects",
         "score",
         "entity_profiles",
+        "player_sandbox",
     },
     profiles = TestModeProfiles.PROFILE_IDS,
     RegisterProfiles = TestModeProfiles.Register,
