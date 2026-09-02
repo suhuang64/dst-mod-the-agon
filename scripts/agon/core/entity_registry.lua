@@ -95,6 +95,8 @@ local function SetManagedFields(entity, record)
     entity._agon_instance_id = record.instance_id
     entity._agon_scope_id = record.scope_id
     entity._agon_generation = record.generation
+    entity._agon_parent_entity_id = record.parent_entity_id
+    entity._agon_root_owner = record.root_owner_entity
     if type(entity.AddTag) == "function" then
         local ok = ProtectedCall(entity.AddTag, entity, "agon_managed")
         if not ok then
@@ -112,6 +114,8 @@ local function ClearManagedFields(entity, instance_id)
         entity._agon_instance_id = nil
         entity._agon_scope_id = nil
         entity._agon_generation = nil
+        entity._agon_parent_entity_id = nil
+        entity._agon_root_owner = nil
         if type(entity.RemoveTag) == "function" then
             ProtectedCall(entity.RemoveTag, entity, "agon_managed")
         end
@@ -258,6 +262,7 @@ function EntityRegistry.Register(self, entity, data)
         profile_id = data.profile_id,
         profile_version = data.profile_version,
         parent_entity_id = data.parent_entity_id,
+        root_owner_entity = data.root_owner_entity,
         spawn_source = data.spawn_source,
         persistent_key = data.persistent_key,
         metadata = CopyValue(data.metadata),
@@ -317,6 +322,56 @@ end
 
 function EntityRegistry.Claim(self, entity, data)
     return self:Register(entity, data)
+end
+
+function EntityRegistry.Inherit(self, child, parent, data)
+    data = type(data) == "table" and data or {}
+    if not IsValidEntity(child) or not IsValidEntity(parent) or child == parent then
+        return nil, Diagnostics.ERROR_CODES.ENTITY_OWNER_MISMATCH
+    end
+
+    local parent_record = self:GetByEntity(parent)
+    if parent_record == nil or parent_record.instance_id ~= self.instance_id
+        or not IsScopeOpen(parent_record.scope) then
+        return nil, Diagnostics.ERROR_CODES.ENTITY_OWNER_MISMATCH
+    end
+
+    local child_guid = GetGuid(child)
+    if child_guid == nil then
+        return nil, Diagnostics.ERROR_CODES.ENTITY_REGISTRATION_FAILED
+    end
+    local existing = self.records_by_guid[child_guid]
+    if existing ~= nil then
+        if existing.entity == child and existing.instance_id == self.instance_id then
+            return existing
+        end
+        return nil, Diagnostics.ERROR_CODES.ENTITY_REGISTRATION_FAILED
+    end
+
+    local root_owner = data.root_owner_entity or parent_record.root_owner_entity or parent
+    local record, register_code = self:Register(
+        child,
+        {
+            scope = data.scope or parent_record.scope,
+            generation = data.generation or parent_record.generation,
+            prefab = data.prefab or child.prefab,
+            category = data.category or "CHILD",
+            cleanup_policy = data.cleanup_policy or parent_record.cleanup_policy,
+            profile_id = data.profile_id or parent_record.profile_id,
+            profile_version = data.profile_version or parent_record.profile_version,
+            parent_entity_id = parent_record.guid,
+            root_owner_entity = root_owner,
+            spawn_source = data.spawn_source or parent_record.spawn_source,
+            persistent_key = data.persistent_key,
+            metadata = data.metadata,
+        }
+    )
+    if record == nil then
+        return nil, register_code or Diagnostics.ERROR_CODES.ENTITY_REGISTRATION_FAILED
+    end
+    child._agon_parent_entity = parent
+    child._agon_root_owner = root_owner
+    return record
 end
 
 function EntityRegistry.Unregister(self, guid_or_entity, from_onremove)
@@ -447,6 +502,7 @@ function EntityRegistry.GetSnapshot(self)
                     profile_id = record.profile_id,
                     profile_version = record.profile_version,
                     parent_entity_id = record.parent_entity_id,
+                    root_owner_entity_id = GetGuid(record.root_owner_entity),
                     spawn_source = record.spawn_source,
                     persistent_key = record.persistent_key,
                     metadata = CopyValue(record.metadata),
@@ -501,6 +557,7 @@ local function AttachMethods(registry)
     registry.List = EntityRegistry.List
     registry.Register = EntityRegistry.Register
     registry.Claim = EntityRegistry.Claim
+    registry.Inherit = EntityRegistry.Inherit
     registry.Unregister = EntityRegistry.Unregister
     registry.Remove = EntityRegistry.Remove
     registry.RemoveGuids = EntityRegistry.RemoveGuids

@@ -1,7 +1,17 @@
 -- WP0：The Agon 公共底座 Mod 骨架
 --
--- 共享/客户端声明区必须位于服务端硬门之前，并且始终注册。WP0 尚无需要
--- 注册的客户端 Prefab、classified 或 RPC。
+-- 共享/客户端声明区必须位于服务端硬门之前，并且始终注册。WP4 在这里
+-- 注册 classified Prefab 与 RPC；真正的 Instance-aware 行为仍由服务端 runtime 控制。
+
+PrefabFiles =
+{
+    "agon_player_classified",
+}
+
+-- WP4：RPC 定义和 classified 必须在客户端/服务端共享注册区无条件加载；
+-- 具体请求仍由服务端 runtime 再做 Instance-aware 校验。
+local AgonRpc = require("agon/net/rpc")
+AgonRpc.Register()
 
 local function StartAgonServerRuntime(world)
     -- world.ismastersim 表示当前 shard 持有权威模拟；这里不是 Master shard
@@ -22,6 +32,20 @@ end
 
 -- world 回调无条件注册，避免通过顶层配置 return 跳过共享/客户端声明区。
 AddPrefabPostInit("world", StartAgonServerRuntime)
+
+-- WP4：把自定义 classified 绑定到玩家。没有启用 The Agon 的 shard 不会创建
+-- server runtime，因此这里不会产生任何额外的实体或监听器。
+AddPlayerPostInit(function(player)
+    local world = GLOBAL.TheWorld
+    local runtime = world ~= nil
+        and world.ismastersim == true
+        and world.components ~= nil
+        and world.components.agon_runtime
+        or nil
+    if runtime ~= nil then
+        runtime:OnPlayerAdded(player)
+    end
+end)
 
 -- WP2：通过官方 UserCommand 接口提供最小 server-admin 诊断入口。
 -- 配置关闭时不注册 Agon 命令，避免在其他 shard 暴露无效管理入口。
@@ -176,6 +200,15 @@ if GetModConfigData("enable_agon") == true then
                 },
                 applied and "TestMode scene plan applied" or "TestMode scene plan failed"
             )
+        end
+    )
+
+    RegisterAgonAdminCommand(
+        "agon.test.wp4",
+        {},
+        "运行 The Agon WP4 的实例隔离、随机流、定向状态和 RPC 幂等诊断。",
+        function(runtime)
+            runtime:RunWP4Diagnostics()
         end
     )
 

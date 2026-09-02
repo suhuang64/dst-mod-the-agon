@@ -187,6 +187,7 @@ function SpawnService.Spawn(self, instance, spec, scope)
     end
 
     local root_guid = GetGuid(root)
+    local root_owner_entity = spec.root_owner_entity or root
     local ordered_entities = { root }
     for index = 1, #context.entities do
         local entity = context.entities[index]
@@ -223,6 +224,7 @@ function SpawnService.Spawn(self, instance, spec, scope)
                 profile_id = spec.profile_id,
                 profile_version = spec.profile_version,
                 parent_entity_id = parent_entity_id,
+                root_owner_entity = root_owner_entity,
                 spawn_source = spawn_source,
                 persistent_key = spec.persistent_key,
                 metadata = spec.metadata,
@@ -257,6 +259,19 @@ function SpawnService.Claim(self, instance, entity, data, scope)
     return self.entity_registry:Claim(entity, data)
 end
 
+function SpawnService.Inherit(self, instance, child, parent, data)
+    if self.closed then
+        return nil, Diagnostics.ERROR_CODES.SCOPE_CLOSED
+    end
+    if GetInstanceId(instance) ~= self.instance_id then
+        return nil, Diagnostics.ERROR_CODES.SCOPE_INSTANCE_MISMATCH
+    end
+    if type(self.entity_registry.Inherit) ~= "function" then
+        return nil, Diagnostics.ERROR_CODES.ENTITY_OWNER_MISMATCH
+    end
+    return self.entity_registry:Inherit(child, parent, data)
+end
+
 function SpawnService.Close(self)
     self.closed = true
 end
@@ -274,6 +289,7 @@ end
 local function AttachMethods(service)
     service.Spawn = SpawnService.Spawn
     service.Claim = SpawnService.Claim
+    service.Inherit = SpawnService.Inherit
     service.Close = SpawnService.Close
     service.GetDebugString = SpawnService.GetDebugString
     return service

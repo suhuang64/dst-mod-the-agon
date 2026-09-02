@@ -2,6 +2,7 @@
 
 local ResourceScope = require("agon/core/resource_scope")
 local EntityRegistry = require("agon/core/entity_registry")
+local InstanceRng = require("agon/core/instance_rng")
 
 local Instance = {}
 
@@ -135,6 +136,42 @@ function Instance.GetEntityRegistry(self)
     return self.entity_registry
 end
 
+function Instance.GetRng(self)
+    return self.rng
+end
+
+function Instance.GetRulePolicy(self)
+    return self.rule_policy
+end
+
+function Instance.GetParticipant(self, userid)
+    if userid == nil then
+        return nil
+    end
+    return self.participants[tostring(userid)]
+end
+
+function Instance.ListParticipants(self)
+    local participants = {}
+    for index = 1, #self.participant_order do
+        local participant = self.participants[self.participant_order[index]]
+        if participant ~= nil then
+            table.insert(participants, participant)
+        end
+    end
+    return participants
+end
+
+function Instance.InheritEntity(self, child, parent, options)
+    if self.spawn_service ~= nil and type(self.spawn_service.Inherit) == "function" then
+        return self.spawn_service:Inherit(self, child, parent, options)
+    end
+    if self.rule_policy ~= nil and type(self.rule_policy.PropagateMembership) == "function" then
+        return self.rule_policy:PropagateMembership(child, parent, options)
+    end
+    return nil, Instance.ERROR_CODES.SCENE_SERVICE_NOT_READY
+end
+
 function Instance.CreateScope(self, name)
     if self.root_scope == nil then
         return nil, Instance.ERROR_CODES.SCOPE_NOT_READY
@@ -223,6 +260,12 @@ function Instance.TransitionTo(self, next_state, reason, now)
     self.generation = self.generation + 1
     self.state_entered_at = now ~= nil and now or GetNow(self)
     self.last_transition_reason = reason ~= nil and tostring(reason) or nil
+    for index = 1, #self.participant_order do
+        local participant = self.participants[self.participant_order[index]]
+        if participant ~= nil and type(participant.SetInstanceGeneration) == "function" then
+            participant:SetInstanceGeneration(self.generation)
+        end
+    end
     return true
 end
 
@@ -417,7 +460,16 @@ function Instance.GetSnapshot(self)
         result = CopyValue(self.result),
         scene_plan = CopyValue(self.scene_plan),
         scene_transactions = {},
+        participants = {},
+        rng = self.rng ~= nil and self.rng:GetSnapshot() or nil,
     }
+
+    for index = 1, #self.participant_order do
+        local participant = self.participants[self.participant_order[index]]
+        if participant ~= nil then
+            table.insert(snapshot.participants, participant:GetSnapshot())
+        end
+    end
 
     if self.scene_service ~= nil then
         local scene_snapshot = self.scene_service:GetSnapshot(self)
@@ -455,6 +507,11 @@ local function AttachMethods(instance)
     instance.GetGeneration = Instance.GetGeneration
     instance.GetRootScope = Instance.GetRootScope
     instance.GetEntityRegistry = Instance.GetEntityRegistry
+    instance.GetRng = Instance.GetRng
+    instance.GetRulePolicy = Instance.GetRulePolicy
+    instance.GetParticipant = Instance.GetParticipant
+    instance.ListParticipants = Instance.ListParticipants
+    instance.InheritEntity = Instance.InheritEntity
     instance.CreateScope = Instance.CreateScope
     instance.DoTaskInTime = Instance.DoTaskInTime
     instance.DoPeriodicTask = Instance.DoPeriodicTask
@@ -505,6 +562,7 @@ function Instance.New(instance_id, definition, zone, options)
         state_entered_at = now,
         generation = 1,
         participants = {},
+        participant_order = {},
         participant_groups = {},
         services = {},
         scene_revision = 0,
@@ -518,7 +576,14 @@ function Instance.New(instance_id, definition, zone, options)
         destroy_called = false,
         now_fn = options.now_fn,
         resource_owner = options.owner,
+        participant_manager = options.participant_manager,
+        rule_policy = options.rule_policy,
     }
+    local rng, rng_code = InstanceRng.New(options.seed or instance_id)
+    if rng == nil then
+        return nil, rng_code or Instance.ERROR_CODES.INVALID_INSTANCE
+    end
+    instance.rng = rng
     local root_scope, scope_code = ResourceScope.New(
     {
         instance_id = instance_id,

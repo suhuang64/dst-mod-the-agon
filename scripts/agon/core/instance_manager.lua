@@ -1,6 +1,8 @@
 -- WP2/WP3：创建、索引、场景切换和销毁 Instance；只有本模块推进主生命周期。
 
 local Instance = require("agon/core/instance")
+local Participant = require("agon/core/participant")
+local RulePolicy = require("agon/core/rule_policy")
 
 local InstanceManager = {}
 InstanceManager.SCHEMA_VERSION = 1
@@ -11,6 +13,10 @@ InstanceManager.ERROR_CODES =
     CORE_NOT_READY = "CORE_NOT_READY",
     INVALID_MODE = "INVALID_MODE",
     PARTICIPANTS_NOT_SUPPORTED = "PARTICIPANTS_NOT_SUPPORTED",
+    INVALID_USERID = "INVALID_PARTICIPANT_USERID",
+    PARTICIPANT_ALREADY_ACTIVE = "PARTICIPANT_ALREADY_ACTIVE",
+    PARTICIPANT_NOT_FOUND = "PARTICIPANT_NOT_FOUND",
+    PARTICIPANT_INSTANCE_MISMATCH = "PARTICIPANT_INSTANCE_MISMATCH",
     NO_FREE_ZONE = "NO_FREE_ZONE",
     INSTANCE_CREATE_FAILED = "INSTANCE_CREATE_FAILED",
     INSTANCE_NOT_FOUND = "INSTANCE_NOT_FOUND",
@@ -47,6 +53,15 @@ local function AttachMethods(manager)
     manager.Validate = InstanceManager.Validate
     manager.GetDebugLines = InstanceManager.GetDebugLines
     manager.GetInstanceDebugData = InstanceManager.GetInstanceDebugData
+    manager.GetParticipant = InstanceManager.GetParticipant
+    manager.GetParticipantInstanceId = InstanceManager.GetParticipantInstanceId
+    manager.AddParticipant = InstanceManager.AddParticipant
+    manager.AttachPlayer = InstanceManager.AttachPlayer
+    manager.MarkDisconnected = InstanceManager.MarkDisconnected
+    manager.RemoveParticipant = InstanceManager.RemoveParticipant
+    manager.ResolveInstance = InstanceManager.ResolveInstance
+    manager.ResolveRootOwner = InstanceManager.ResolveRootOwner
+    manager.CanInteract = InstanceManager.CanInteract
     return manager
 end
 
@@ -77,7 +92,7 @@ function InstanceManager.New(options)
         return nil, InstanceManager.ERROR_CODES.INVALID_SEQUENCE
     end
 
-    return AttachMethods(
+    local manager =
     {
         schema_version = InstanceManager.SCHEMA_VERSION,
         restart_policy = InstanceManager.RESTART_POLICY,
@@ -92,7 +107,16 @@ function InstanceManager.New(options)
         instance_order = {},
         destroyed_ids = {},
         restart_aborted_count = 0,
+        participants_by_userid = {},
+    }
+    manager.rule_policy = RulePolicy.New(
+    {
+        participant_index = manager.participants_by_userid,
+        instance_lookup = function(instance_id)
+            return manager.instances_by_id[instance_id]
+        end,
     })
+    return AttachMethods(manager)
 end
 
 function InstanceManager.Get(self, instance_id)
@@ -123,12 +147,171 @@ function InstanceManager.Count(self)
     return count
 end
 
+function InstanceManager.GetParticipant(self, userid)
+    if not IsNonEmptyString(userid) then
+        return nil
+    end
+    return self.participants_by_userid[userid]
+end
+
+function InstanceManager.GetParticipantInstanceId(self, userid)
+    local participant = self:GetParticipant(userid)
+    return participant ~= nil and participant.instance_id or nil
+end
+
+function InstanceManager.AddParticipant(self, instance_id, userid, options)
+    if not IsNonEmptyString(instance_id) or not IsNonEmptyString(userid) then
+        return nil, InstanceManager.ERROR_CODES.INVALID_USERID
+    end
+    local instance = self:Get(instance_id)
+    if instance == nil then
+        return nil, InstanceManager.ERROR_CODES.INSTANCE_NOT_FOUND
+    end
+    if instance:IsDestroyed() or instance.lifecycle_state == Instance.STATES.FAILED then
+        return nil, InstanceManager.ERROR_CODES.PARTICIPANT_INSTANCE_MISMATCH
+    end
+
+    local existing = self.participants_by_userid[userid]
+    if existing ~= nil then
+        return nil, InstanceManager.ERROR_CODES.PARTICIPANT_ALREADY_ACTIVE
+    end
+    if instance.participants[userid] ~= nil then
+        return nil, InstanceManager.ERROR_CODES.PARTICIPANT_ALREADY_ACTIVE
+    end
+
+    options = type(options) == "table" and options or {}
+    local participant, participant_code = Participant.New(
+        userid,
+        instance_id,
+        {
+            generation = instance.generation,
+            joined_at = options.joined_at or GetNow(self),
+            now_fn = self.now_fn,
+            role = options.role,
+            group_ids = options.group_ids,
+            player_ref = options.player_ref,
+        }
+    )
+    if participant == nil then
+        return nil, participant_code or InstanceManager.ERROR_CODES.INVALID_USERID
+    end
+    instance.participants[userid] = participant
+    table.insert(instance.participant_order, userid)
+    self.participants_by_userid[userid] = participant
+    return participant
+end
+
+function InstanceManager.AttachPlayer(self, instance_id, userid, player)
+    if not IsNonEmptyString(instance_id) or not IsNonEmptyString(userid) then
+        return false, InstanceManager.ERROR_CODES.INVALID_USERID
+    end
+    local instance = self:Get(instance_id)
+    local participant = self:GetParticipant(userid)
+    if instance == nil or participant == nil
+        or participant.instance_id ~= instance_id then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
+    end
+    local attached, attach_code = participant:AttachPlayer(
+        player,
+        instance.generation,
+        GetNow(self)
+    )
+    if not attached then
+        return false, attach_code
+    end
+    return true
+end
+
+function InstanceManager.MarkDisconnected(self, userid, reason)
+    local participant = self:GetParticipant(userid)
+    if participant == nil then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
+    end
+    local instance = self:Get(participant.instance_id)
+    local generation = instance ~= nil and instance.generation or participant.generation
+    return participant:MarkDisconnected(reason, generation, GetNow(self))
+end
+
+function InstanceManager.RemoveParticipant(self, instance_id, userid, reason)
+    local instance = self:Get(instance_id)
+    local participant = self:GetParticipant(userid)
+    if instance == nil or participant == nil
+        or participant.instance_id ~= instance_id then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
+    end
+    local left, left_code = participant:MarkLeft(
+        reason or "participant_removed",
+        instance.generation,
+        GetNow(self)
+    )
+    if not left then
+        return false, left_code
+    end
+    instance.participants[userid] = nil
+    for index = 1, #instance.participant_order do
+        if instance.participant_order[index] == userid then
+            table.remove(instance.participant_order, index)
+            break
+        end
+    end
+    if self.participants_by_userid[userid] == participant then
+        self.participants_by_userid[userid] = nil
+    end
+    return true
+end
+
+function InstanceManager.ResolveInstance(self, subject)
+    return self.rule_policy:ResolveInstance(subject)
+end
+
+function InstanceManager.ResolveRootOwner(self, entity)
+    return self.rule_policy:ResolveRootOwner(entity)
+end
+
+function InstanceManager.CanInteract(self, action, source, target, options)
+    return self.rule_policy:CanInteract(action, source, target, options)
+end
+
 local function RemoveFromOrder(self, instance_id)
     for index = 1, #self.instance_order do
         if self.instance_order[index] == instance_id then
             table.remove(self.instance_order, index)
             return
         end
+    end
+end
+
+local function NormalizeUserids(userids)
+    if userids == nil then
+        return {}
+    end
+    if type(userids) ~= "table" then
+        return nil, InstanceManager.ERROR_CODES.PARTICIPANTS_NOT_SUPPORTED
+    end
+
+    local normalized = {}
+    local seen = {}
+    for index = 1, #userids do
+        local userid = userids[index]
+        if not IsNonEmptyString(userid) then
+            return nil, InstanceManager.ERROR_CODES.INVALID_USERID
+        end
+        if seen[userid] then
+            return nil, InstanceManager.ERROR_CODES.PARTICIPANT_ALREADY_ACTIVE
+        end
+        seen[userid] = true
+        table.insert(normalized, userid)
+    end
+    return normalized
+end
+
+local function RemoveInstanceParticipants(self, instance)
+    local userids = {}
+    for index = 1, #instance.participant_order do
+        userids[index] = instance.participant_order[index]
+    end
+    for index = #userids, 1, -1 do
+        self:RemoveParticipant(instance.instance_id, userids[index], "instance_create_rollback")
     end
 end
 
@@ -140,12 +323,14 @@ function InstanceManager.Create(self, mode_id, userids)
     if not IsNonEmptyString(mode_id) then
         return nil, InstanceManager.ERROR_CODES.INVALID_MODE
     end
-    if userids ~= nil
-        and type(userids) ~= "table" then
-        return nil, InstanceManager.ERROR_CODES.PARTICIPANTS_NOT_SUPPORTED
+    local requested_userids, userids_code = NormalizeUserids(userids)
+    if requested_userids == nil then
+        return nil, userids_code
     end
-    if type(userids) == "table" and #userids > 0 then
-        return nil, InstanceManager.ERROR_CODES.PARTICIPANTS_NOT_SUPPORTED
+    for index = 1, #requested_userids do
+        if self.participants_by_userid[requested_userids[index]] ~= nil then
+            return nil, InstanceManager.ERROR_CODES.PARTICIPANT_ALREADY_ACTIVE
+        end
     end
 
     local definition = self.mode_registry:Get(mode_id)
@@ -172,6 +357,8 @@ function InstanceManager.Create(self, mode_id, userids)
             now = GetNow(self),
             now_fn = self.now_fn,
             owner = self.world,
+            participant_manager = self,
+            rule_policy = self.rule_policy,
         }
     )
     if instance == nil then
@@ -179,9 +366,30 @@ function InstanceManager.Create(self, mode_id, userids)
         return nil, instance_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
     end
 
+    self.instances_by_id[instance_id] = instance
+    table.insert(self.instance_order, instance_id)
+
+    for index = 1, #requested_userids do
+        local participant, participant_code = self:AddParticipant(
+            instance_id,
+            requested_userids[index]
+        )
+        if participant == nil then
+            RemoveInstanceParticipants(self, instance)
+            self.instances_by_id[instance_id] = nil
+            RemoveFromOrder(self, instance_id)
+            instance.root_scope:Close("participant_create_failed")
+            self.zone_manager:ReleaseReservation(zone.zone_id, instance_id)
+            return nil, participant_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
+        end
+    end
+
     if self.scene_service ~= nil then
         local attached, attach_code = self.scene_service:AttachInstance(instance)
         if not attached then
+            RemoveInstanceParticipants(self, instance)
+            self.instances_by_id[instance_id] = nil
+            RemoveFromOrder(self, instance_id)
             instance.root_scope:Close("scene_attach_failed")
             self.zone_manager:ReleaseReservation(zone.zone_id, instance_id)
             return nil, attach_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
@@ -190,6 +398,9 @@ function InstanceManager.Create(self, mode_id, userids)
 
     local prepared, prepare_code = instance:Prepare("create")
     if not prepared then
+        RemoveInstanceParticipants(self, instance)
+        self.instances_by_id[instance_id] = nil
+        RemoveFromOrder(self, instance_id)
         if self.scene_service ~= nil then
             self.scene_service:DetachInstance(instance)
         end
@@ -207,8 +418,6 @@ function InstanceManager.Create(self, mode_id, userids)
         return nil, prepare_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
     end
 
-    self.instances_by_id[instance_id] = instance
-    table.insert(self.instance_order, instance_id)
     return instance, "INSTANCE_CREATED"
 end
 
@@ -449,6 +658,11 @@ function InstanceManager.Destroy(self, instance_id, reason)
         return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
     end
 
+    RemoveInstanceParticipants(self, instance)
+    if self.audience_state_channel ~= nil
+        and type(self.audience_state_channel.ClearInstance) == "function" then
+        self.audience_state_channel:ClearInstance(instance_id)
+    end
     self.instances_by_id[instance_id] = nil
     self.destroyed_ids[instance_id] = true
     RemoveFromOrder(self, instance_id)
@@ -514,7 +728,11 @@ function InstanceManager.OnLoad(self, data)
         self.next_sequence = data.next_sequence
     end
 
-    -- WP2 不恢复正在运行的玩法；没有地形和玩家资源需要回收，新的 Zone 池从 FREE 开始。
+    -- 当前仍采用 ABORT_ON_RESTART；Participant 索引不从活动实例快照恢复，
+    -- 避免把已经断开的连接伪造为活动玩家。
+    self.participants_by_userid = {}
+    self.rule_policy.participant_index = self.participants_by_userid
+    -- WP2/WP4 不恢复正在运行的玩法；没有地形和玩家资源需要回收，新的 Zone 池从 FREE 开始。
     self.restart_aborted_count = data.instances ~= nil and #data.instances or 0
     return true, self.restart_aborted_count > 0 and "ACTIVE_INSTANCES_ABORTED" or nil
 end
@@ -526,6 +744,16 @@ function InstanceManager.Validate(self)
     end
 
     local seen_zones = {}
+    local seen_participants = {}
+    for userid, participant in pairs(self.participants_by_userid) do
+        if participant == nil or participant.userid ~= userid
+            or not IsNonEmptyString(participant.instance_id)
+            or seen_participants[userid] then
+            return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+        end
+        seen_participants[userid] = true
+    end
+
     for index = 1, #self.instance_order do
         local instance_id = self.instance_order[index]
         local instance = self.instances_by_id[instance_id]
@@ -542,6 +770,26 @@ function InstanceManager.Validate(self)
             return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
         end
         seen_zones[instance.zone_id] = true
+        local participant_order_seen = {}
+        for participant_index = 1, #instance.participant_order do
+            local userid = instance.participant_order[participant_index]
+            local participant = instance.participants[userid]
+            if not IsNonEmptyString(userid)
+                or participant == nil
+                or participant.userid ~= userid
+                or participant.instance_id ~= instance.instance_id
+                or participant_order_seen[userid]
+                or self.participants_by_userid[userid] ~= participant then
+                return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+            participant_order_seen[userid] = true
+        end
+        for userid, participant in pairs(instance.participants) do
+            if not participant_order_seen[userid] or participant == nil
+                or self.participants_by_userid[userid] ~= participant then
+                return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+        end
         if self.scene_service ~= nil then
             local scene_valid, scene_code = self.scene_service:Validate(instance)
             if not scene_valid then

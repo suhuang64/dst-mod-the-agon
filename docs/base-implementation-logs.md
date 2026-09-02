@@ -387,3 +387,68 @@ docs(base): 修正执行日志文件名
   ```text
   feat(scene): 实现实例场景事务与资源隔离
   ```
+
+### 1.16 2026-09-02：WP4 隔离、Participant、InstanceRng 与定向状态通道
+
+#### 执行范围与基线
+
+- 本次开始前重新读取 `.codex/AGENTS.md`、`docs/base-design.md`、`docs/base-implementation-plan.md` 和本文件，并按约定把本轮过程、证据、限制和清理结果追加到本文件末尾。日志的权威文件名为 `docs/base-implementation-logs.md`；以后每个 WP 仍遵守“先读文档、再改代码、最后追加日志”的规则。
+- 开始时 `the-agon` 的 Git `HEAD` 为 `a124f3c773054f34286fed5730ba1a7441f175c7`（WP3 场景事务与资源隔离提交）；工作树中没有覆盖式回滚、分支切换或 push。本次 WP4 代码保持未提交，用户已有修改未被清理。
+- 按用户要求，运行验证使用正式 `D:/OneDrive/DST/klei/DoNotStarveTogether/Test/World01`，没有改用其他临时 Cluster；没有修改 `D:/OneDrive/DST/scripts` 官方源码。
+
+#### WP4 实现内容
+
+- 新增 `Participant`：维护 userid 与 Instance 的唯一归属、JOINING/READY/PLAYING/LEAVING/LEFT/DISCONNECTED/GHOST/CORPSE 生命周期、generation、死亡状态和可序列化快照。
+- `InstanceManager` 增加 `userid → active instance_id` 索引、重复加入拒绝、玩家绑定/断线/移除、Instance 与 root owner 解析，以及统一 `RulePolicy` 入口；`Instance` 快照增加 participant 顺序和 RNG 状态。
+- 新增 `RulePolicy`：按 Participant index、membership、快速归属字段和 projectile/weapon/drop/minion/trap/container 的 root owner 解析 Instance；默认拒绝无归属实体和跨 Instance 的 DAMAGE、HEAL、PICKUP、CONTAINER、PROJECTILE、TARGET、CONTROL 交互，并提供 child ownership 传播。
+- 新增 `InstanceRng`：每个 Instance 使用独立 seed 和独立命名 stream 的 Park-Miller 随机流；不调用共享 `math.random`，支持 seed、stream counter 和快照。
+- 新增 `AudienceStateChannel`：实现 PRIVATE、GROUP、INSTANCE、SPECTATOR、PUBLIC audience 的授权读取和 payload 可序列化/大小校验；本 WP 先实际接入 PRIVATE/INSTANCE，GROUP resolver 留待 WP5。
+- 新增 `rpc.lua`、`classified.lua` 和 `agon_player_classified` Prefab：统一校验 sender、userid、Participant、Instance 生命周期、generation、scene revision、target ownership、request ID 幂等和请求速率；classified 使用官方 Network classified target、parent entity、net_uint/net_string 模式。
+- Runtime 接入 player classified、audience channel、RPC 和官方 `ms_playerjoined/ms_playerleft` 生命周期监听，并兼容 Core ready 前已经存在于 `AllPlayers` 的玩家；`agon.test.wp4` 可从官方 UserCommand 路径调用诊断。
+- `EntityRegistry`/`SpawnService` 扩展 parent/root owner 元数据和继承注册；`diagnostics.lua` 增加 WP4 结果码；新增 `wp4_diagnostics.lua` 覆盖两个临时 TestMode Instance 的隔离、归属、RNG、audience 和 RPC 幂等。
+
+#### 官方 API 核对与修复
+
+- 修改前核对了 `D:/OneDrive/DST/scripts/networkclientrpc.lua` 的 `AddModRPCHandler`、`SendModRPCToServer` 和 handler 签名，`prefabs/attunable_classified.lua` 的 classified target/parent 生命周期，`components/projectile.lua` 的 owner，`components/inventoryitem.lua` 的 `GetGrandOwner`，`net_string`/`net_uint`，`usercommands.lua` 的 UserCommand 执行路径，以及 `ms_playerjoined/ms_playerleft` 的官方监听方式。
+- 首次实服诊断发现重复 RPC 未命中：请求记录写入 `requests.by_id`，重复检查却读了错误层级。已修正为检查 `requests.by_id[request_id]`，修复后重复 request ID 不再触发第二次副作用。
+- 同一服务器重复运行诊断时发现临时 request/state ID 会复用；已为每次诊断加入 boot/run 递增后缀，入口可重复执行。
+- 真实玩家探针发现玩家可能在 runtime Core ready 前加入，单靠 `AddPlayerPostInit` 会漏掉 classified 绑定；已补上官方玩家加入/离开监听，并在 Core ready 时扫描已有 `AllPlayers`。重启后的 hook 探针输出为 `WP4_PLAYER_HOOK true`。
+
+#### 正式 Test/World01 实服验证
+
+- 服务端使用官方可执行文件：
+
+  ```text
+  D:/SteamLibrary/steamapps/common/Don't Starve Together/bin64/dontstarve_dedicated_server_nullrenderer_x64.exe
+  ```
+
+- 启动参数：
+
+  ```text
+  -persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01
+  ```
+
+- 服务端成功加载 WP4，日志输出：
+
+  ```text
+  [TheAgon] [LAYOUT_READY] ... portal_tile_x=200 portal_tile_z=200 ... map_width=400 map_height=400
+  [TheAgon] [CORE_READY] ... instance_count=0 zone_count=10 free_zone_count=10 aborted_instance_count=0
+  WP4_PLAYER_HOOK true
+  [TheAgon] [WP4_TEST_PASS] shard_id=1 operation=wp4_diagnostics core_status=READY WP4 isolation diagnostics passed
+  ```
+
+- 诊断覆盖：同一 userid 不能进入两个 Instance；两个相邻 Zone 的同局交互允许、跨局 DAMAGE 拒绝、无归属 PICKUP 拒绝；child/projectile root owner 解析；同 seed 同命名 stream 可复现且不同 stream 不互相消耗；PRIVATE/INSTANCE 状态可见性；有效 RPC 接受、重复 request ID 拒绝、跨局 target 拒绝。此前还通过了 `usercommands.RunTextUserCommand("agon.test.wp4", ...)` 的正式管理命令路径和 `WP4_COMMAND_REGISTERED true` 探针。
+- 首次真实玩家 classified 探针曾因加入时序得到未绑定结果，随后用手动 `OnPlayerAdded` 验证了 Prefab/net 字段创建，再加入生命周期监听修复。修复后的最新启动已验证 hook 注册和 WP4 诊断；该次启动没有真实客户端在线（`WP4_PLAYERS 0`），因此客户端实际复制到 UI 的完整视觉链路和修复后真实玩家自动绑定仍未完成端到端验证。
+- 本次服务端运行结束前执行 `c_shutdown()`，服务端完成两次存档序列化并正常退出；随后检查不到目标服务端进程，端口 `12000`/`11889` 无监听。`server_log.txt` 的最后扫描只有 The Agon 的 STARTED、LAYOUT_READY、CORE_READY、WP4_TEST_PASS，以及下述两条既有官方警告，没有新的 Lua traceback、`attempt to call`、`nil value` 或 `bad argument`。
+
+#### 静态检查、限制与清理
+
+- `git diff --check` 通过，输出仅为 Git 的 LF/CRLF 转换提示；新增代码中的自然语言注释已统一为中文。没有可用的 PATH Lua/Luac 语法检查器，因此没有全局安装工具；本次正式专服加载和诊断同时承担 Lua 模块加载/API 兼容验证。
+- 本次没有真实双客户端并发、跨 shard RPC、客户端视觉 UI、正式玩法、ParticipantSandbox、ParticipantGroup、Common Services、Profile 或完整玩家恢复验证；这些按 WP 边界留给后续 WP。WP4 自身不恢复带玩法的 active Instance，恢复逻辑仍由 WP9 的 `ABORT_ON_RESTART`/restore 流程负责。
+- 关于此前“暂未单独执行跨重启存档恢复测试”的标注：WP2 已在 1.13 用隔离存档完成 active Instance 的 `c_save()`、停止、同存档重启、中止、序号延续和 Zone 回收；WP3 已在 1.15 对正式 `Test/World01` 完成清场后的重启复核。WP4 本身没有重复伪造一套 active Instance restore 测试，因为它没有新增恢复实现；后续 WP9 仍需针对网络/Participant 恢复队列做专门验证。
+- 两条官方 set-piece angle 警告仍为：`hermitcrab_relocation_manager` 找不到 `monkeyqueen/monkeyportal`，`wagpunk_arena_manager` 找不到 `hermitcrab_marker/beebox_hermit`。按既有计划只记录、不处理。
+- 本次没有 commit、push、分支操作，也没有修改官方源码。当前 WP4 代码处于未提交工作树，建议 Commit：
+
+  ```text
+  feat(isolation): 增加实例归属隔离与定向状态同步
+  ```
