@@ -452,3 +452,20 @@ docs(base): 修正执行日志文件名
   ```text
   feat(isolation): 增加实例归属隔离与定向状态同步
   ```
+
+### 1.17 2026-09-02：WP4 验收项逐项覆盖度复核
+
+- 本次根据 `scripts/agon/modes/test_mode/wp4_diagnostics.lua`、`scripts/agon/core/rule_policy.lua`、`scripts/agon/net/rpc.lua` 和 1.16 实服记录复核验收项；本次只读审计，没有修改代码、启动服务器或改变存档。
+- 同一玩家不能加入两个 Instance：**已验证**。诊断创建两个临时 Instance 并绑定两个 userid，再用已占用 userid 创建第二个 Instance，结果被拒绝。
+- 两个相邻 Zone 不能跨局攻击、拾取或访问容器：**部分验证**。已在正式 Test shard 运行跨 Instance `DAMAGE` 拒绝；另验证了无归属实体的 `PICKUP` 拒绝，但没有在诊断中分别运行“跨 Instance PICKUP”和“跨 Instance CONTAINER”的目标实体案例。`RulePolicy` 已提供通用 `CanPickup`/`CanOpenContainer` 别名和相同 Instance 检查，但这两条仍需补运行证据。
+- projectile/drop 继承 root owner Instance：**部分验证**。诊断使用 synthetic child/projectile owner 验证 membership 和 root owner 解析；`EntityRegistry`/`SpawnService` 已实现继承字段，但尚未用真实 DST projectile、drop 或 container item Prefab 完成运行时案例。
+- 无归属实体默认不能被 Mode 控制：**部分验证**。已验证无归属 `PICKUP` 被拒绝，且 `CanControl` 在策略代码中默认要求同 Instance；尚未在 TestMode 诊断中直接执行 `CONTROL` action 的无归属案例。
+- 同 seed 同 stream 可复现、不同 stream 不互相消耗：**已验证**。诊断比较相同 seed/`loot` stream 的八个结果，并在消耗 `scene` stream 后确认 `loot` 序列不变。
+- PRIVATE 不发给其他玩家、INSTANCE 不发给其他 Instance：**服务端 audience 可见性已验证**。诊断用两个 Participant 的 `ReadFor` 检查 PRIVATE 和 INSTANCE 均不泄漏；最新启动没有真实客户端，因此客户端网络复制和 UI 展示仍未完成端到端验证。
+- 重复 request ID 不产生第二次副作用：**重复请求拦截已验证，实际副作用计数尚未验证**。诊断确认第二次 `Rpc:Handle` 返回 `RPC_DUPLICATE_REQUEST`；当前诊断 RPC 没有配置实际 `dispatch_fn`/副作用计数器，所以未直接观测“业务副作用只执行一次”。代码路径在 dispatch 成功后才记录 request，重复检查发生在 dispatch 前。
+- 结论：1.16 的日志已如实记录了已运行的 DAMAGE、unowned PICKUP、server-side audience 和 duplicate rejection；本条补充了不能冒充完整验收的缺口。WP4 在进入 Base Ready 前仍应补充跨局 PICKUP/CONTAINER、CONTROL、真实 projectile/drop 和带 dispatch counter 的 RPC 诊断，并安排真实客户端 classified 复制测试。
+
+### 1.18 2026-09-02：WP4 当前 Git 状态核对
+
+- 本次复核读取 Git 时确认 WP4 代码及 1.16 执行记录已位于 `ba7a6cf feat(isolation): 增加实例归属隔离与定向状态同步`；本次验收项复核没有执行 commit、push 或代码修改。
+- 当前工作树只包含本次新增的 1.17/1.18 日志复核内容；后续 Agent 应以 `ba7a6cf` 作为 WP4 已提交基线，并继续补齐 1.17 列出的未覆盖运行验收。
