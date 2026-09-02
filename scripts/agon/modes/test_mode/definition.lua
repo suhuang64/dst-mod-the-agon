@@ -7,7 +7,14 @@ local TestModeDefinition =
     mode_id = "TEST_MODE",
     mode_version = 1,
     zone_category = "SMALL",
-    services = {},
+    services =
+    {
+        "phase",
+        "clock",
+        "decision",
+        "effects",
+        "score",
+    },
 }
 
 function TestModeDefinition.CreateRuntime(instance, services)

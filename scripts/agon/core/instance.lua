@@ -3,6 +3,7 @@
 local ResourceScope = require("agon/core/resource_scope")
 local EntityRegistry = require("agon/core/entity_registry")
 local InstanceRng = require("agon/core/instance_rng")
+local ParticipantGroup = require("agon/core/participant_group")
 
 local Instance = {}
 
@@ -144,6 +145,158 @@ function Instance.GetRulePolicy(self)
     return self.rule_policy
 end
 
+function Instance.GetService(self, service_id)
+    if type(service_id) ~= "string" or self.services == nil then
+        return nil
+    end
+    return self.services[service_id]
+end
+
+function Instance.ListServices(self)
+    local services = {}
+    for index = 1, #(self.service_order or {}) do
+        local service_id = self.service_order[index]
+        if self.services[service_id] ~= nil then
+            table.insert(services, service_id)
+        end
+    end
+    return services
+end
+
+function Instance.InitializeServices(self, service_registry, declarations, options)
+    if self.services_initialized then
+        return true, "ALREADY_INITIALIZED"
+    end
+    if service_registry == nil or type(service_registry.CreateForInstance) ~= "function" then
+        return false, Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    local services, service_order, service_versions, service_code = service_registry:CreateForInstance(
+        self,
+        declarations,
+        options
+    )
+    if services == nil then
+        return false, service_code or service_order
+    end
+    self.service_registry = service_registry
+    self.services = services
+    self.service_order = service_order
+    self.service_versions = service_versions
+    self.services_initialized = true
+    self.services_closed = false
+    return true
+end
+
+function Instance.CloseServices(self, reason)
+    if self.services_closed then
+        return true, "ALREADY_CLOSED"
+    end
+    local all_closed = true
+    for index = #(self.service_order or {}), 1, -1 do
+        local service = self.services[self.service_order[index]]
+        if service ~= nil and type(service.Close) == "function" then
+            local ok, closed = pcall(service.Close, service, reason or "instance_services_closed")
+            if not ok or closed == false then
+                all_closed = false
+            end
+        end
+    end
+    self.services_closed = true
+    if all_closed then
+        return true
+    end
+    return false, Instance.ERROR_CODES.SCOPE_NOT_READY
+end
+
+function Instance.GetGroup(self, group_id)
+    if type(group_id) ~= "string" then
+        return nil
+    end
+    return self.participant_groups[group_id]
+end
+
+function Instance.ListGroups(self)
+    local groups = {}
+    for index = 1, #(self.participant_group_order or {}) do
+        local group = self.participant_groups[self.participant_group_order[index]]
+        if group ~= nil then
+            table.insert(groups, group)
+        end
+    end
+    return groups
+end
+
+function Instance.CreateGroup(self, group_type, members, options)
+    if self.lifecycle_state == Instance.STATES.DESTROYED
+        or self.lifecycle_state == Instance.STATES.FAILED then
+        return nil, Instance.ERROR_CODES.LIFECYCLE_TRANSITION_INVALID
+    end
+    options = type(options) == "table" and options or {}
+    self.next_group_sequence = self.next_group_sequence + 1
+    local group_id = options.group_id
+        or self.instance_id .. ":group:" .. tostring(self.next_group_sequence)
+    if self.participant_groups[group_id] ~= nil then
+        return nil, ParticipantGroup.ERROR_CODES.INVALID_GROUP_ID
+    end
+    local group_options = {}
+    for key, value in pairs(options) do
+        group_options[key] = value
+    end
+    group_options.members = members or options.members or {}
+    group_options.generation = options.generation or self.generation
+    local group, group_code = ParticipantGroup.New(
+        self,
+        group_id,
+        group_type,
+        group_options
+    )
+    if group == nil then
+        return nil, group_code
+    end
+    self.participant_groups[group_id] = group
+    table.insert(self.participant_group_order, group_id)
+    return group
+end
+
+function Instance.RemoveGroup(self, group_id, reason)
+    local group = self:GetGroup(group_id)
+    if group == nil then
+        return false, ParticipantGroup.ERROR_CODES.MEMBER_NOT_FOUND
+    end
+    local closed, close_code = group:Close(reason or "group_removed")
+    if not closed then
+        return false, close_code
+    end
+    self.participant_groups[group_id] = nil
+    for index = 1, #self.participant_group_order do
+        if self.participant_group_order[index] == group_id then
+            table.remove(self.participant_group_order, index)
+            break
+        end
+    end
+    return true
+end
+
+function Instance.CloseGroups(self, reason)
+    local all_closed = true
+    for index = #self.participant_group_order, 1, -1 do
+        local group_id = self.participant_group_order[index]
+        local group = self.participant_groups[group_id]
+        if group ~= nil then
+            local closed = group:Close(reason or "instance_groups_closed")
+            if not closed then
+                all_closed = false
+            end
+            self.participant_groups[group_id] = nil
+        end
+    end
+    self.participant_group_order = {}
+    if all_closed then
+        return true
+    end
+    return false, ParticipantGroup.ERROR_CODES.GROUP_CLOSED
+end
+
 function Instance.GetParticipant(self, userid)
     if userid == nil then
         return nil
@@ -160,6 +313,17 @@ function Instance.ListParticipants(self)
         end
     end
     return participants
+end
+
+function Instance.GetParticipantGroupIds(self, userid)
+    local participant = self:GetParticipant(userid)
+    if participant == nil then
+        return {}
+    end
+    if type(participant.GetGroupIds) == "function" then
+        return participant:GetGroupIds()
+    end
+    return participant.group_ids or {}
 end
 
 function Instance.InheritEntity(self, child, parent, options)
@@ -461,6 +625,10 @@ function Instance.GetSnapshot(self)
         scene_plan = CopyValue(self.scene_plan),
         scene_transactions = {},
         participants = {},
+        groups = {},
+        services = {},
+        service_order = CopyValue(self.service_order),
+        service_versions = CopyValue(self.service_versions),
         rng = self.rng ~= nil and self.rng:GetSnapshot() or nil,
     }
 
@@ -468,6 +636,24 @@ function Instance.GetSnapshot(self)
         local participant = self.participants[self.participant_order[index]]
         if participant ~= nil then
             table.insert(snapshot.participants, participant:GetSnapshot())
+        end
+    end
+
+    for index = 1, #(self.participant_group_order or {}) do
+        local group = self.participant_groups[self.participant_group_order[index]]
+        if group ~= nil then
+            table.insert(snapshot.groups, group:GetSnapshot())
+        end
+    end
+
+    for index = 1, #(self.service_order or {}) do
+        local service_id = self.service_order[index]
+        local service = self.services[service_id]
+        if service ~= nil and type(service.GetSnapshot) == "function" then
+            local ok, service_snapshot = pcall(service.GetSnapshot, service)
+            if ok and type(service_snapshot) == "table" then
+                snapshot.services[service_id] = service_snapshot
+            end
         end
     end
 
@@ -509,8 +695,18 @@ local function AttachMethods(instance)
     instance.GetEntityRegistry = Instance.GetEntityRegistry
     instance.GetRng = Instance.GetRng
     instance.GetRulePolicy = Instance.GetRulePolicy
+    instance.GetService = Instance.GetService
+    instance.ListServices = Instance.ListServices
+    instance.InitializeServices = Instance.InitializeServices
+    instance.CloseServices = Instance.CloseServices
+    instance.GetGroup = Instance.GetGroup
+    instance.ListGroups = Instance.ListGroups
+    instance.CreateGroup = Instance.CreateGroup
+    instance.RemoveGroup = Instance.RemoveGroup
+    instance.CloseGroups = Instance.CloseGroups
     instance.GetParticipant = Instance.GetParticipant
     instance.ListParticipants = Instance.ListParticipants
+    instance.GetParticipantGroupIds = Instance.GetParticipantGroupIds
     instance.InheritEntity = Instance.InheritEntity
     instance.CreateScope = Instance.CreateScope
     instance.DoTaskInTime = Instance.DoTaskInTime
@@ -564,7 +760,14 @@ function Instance.New(instance_id, definition, zone, options)
         participants = {},
         participant_order = {},
         participant_groups = {},
+        participant_group_order = {},
+        next_group_sequence = 0,
         services = {},
+        service_order = {},
+        service_versions = {},
+        service_registry = nil,
+        services_initialized = false,
+        services_closed = false,
         scene_revision = 0,
         scene_plan = nil,
         scene_transactions = {},

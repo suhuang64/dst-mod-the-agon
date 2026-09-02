@@ -139,6 +139,46 @@ function Participant.GetPlayer(self)
     return self.player_ref
 end
 
+function Participant.GetGroupIds(self)
+    return CopyValue(self.group_ids)
+end
+
+function Participant.HasGroup(self, group_id)
+    if not IsNonEmptyString(group_id) then
+        return false
+    end
+    for index = 1, #self.group_ids do
+        if self.group_ids[index] == group_id then
+            return true
+        end
+    end
+    return false
+end
+
+function Participant.AddGroupId(self, group_id)
+    if not IsNonEmptyString(group_id) then
+        return false, Participant.ERROR_CODES.INVALID_PARTICIPANT
+    end
+    if self:HasGroup(group_id) then
+        return true, "ALREADY_IN_GROUP"
+    end
+    table.insert(self.group_ids, group_id)
+    return true
+end
+
+function Participant.RemoveGroupId(self, group_id)
+    if not IsNonEmptyString(group_id) then
+        return false, Participant.ERROR_CODES.INVALID_PARTICIPANT
+    end
+    for index = 1, #self.group_ids do
+        if self.group_ids[index] == group_id then
+            table.remove(self.group_ids, index)
+            return true
+        end
+    end
+    return false, "GROUP_NOT_FOUND"
+end
+
 function Participant.IsActive(self)
     return self.state ~= Participant.STATES.LEFT
 end
@@ -332,6 +372,10 @@ local function AttachMethods(participant)
     participant.GetState = Participant.GetState
     participant.GetGeneration = Participant.GetGeneration
     participant.GetPlayer = Participant.GetPlayer
+    participant.GetGroupIds = Participant.GetGroupIds
+    participant.HasGroup = Participant.HasGroup
+    participant.AddGroupId = Participant.AddGroupId
+    participant.RemoveGroupId = Participant.RemoveGroupId
     participant.IsActive = Participant.IsActive
     participant.CanTransition = Participant.CanTransition
     participant.SetInstanceGeneration = Participant.SetInstanceGeneration

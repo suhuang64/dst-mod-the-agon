@@ -469,3 +469,149 @@ docs(base): 修正执行日志文件名
 
 - 本次复核读取 Git 时确认 WP4 代码及 1.16 执行记录已位于 `ba7a6cf feat(isolation): 增加实例归属隔离与定向状态同步`；本次验收项复核没有执行 commit、push 或代码修改。
 - 当前工作树只包含本次新增的 1.17/1.18 日志复核内容；后续 Agent 应以 `ba7a6cf` 作为 WP4 已提交基线，并继续补齐 1.17 列出的未覆盖运行验收。
+
+### 1.19 2026-09-02：WP5 ParticipantGroup 与 Common Services
+
+#### 开始前核对、范围与保护
+
+- 本次继续 WP5 前先读取了 `D:/OneDrive/DST/.codex/AGENTS.md`、`docs/base-design.md`、`docs/base-implementation-plan.md` 和本日志；同时读取了关联任务 `The Agon Mod Development` 的近期历史，再以当前工作树和官方运行结果为准。
+- 当前 nested repository 为 `D:/OneDrive/DST/the-agon`，基线 HEAD 为 `3083d66 feat(isolation): 增加实例归属隔离与定向状态同步`。已有 WP4 未提交修改全部保留，本次没有重置、切分支、commit、push 或清理用户文件。
+- 本次目标是完成 WP5 的 ParticipantGroup、可选 Common Services、TestMode 诊断和官方 `Test/World01` 验收；不提前实现 WP6–WP10 的完整实体定制、玩家恢复或后端能力。
+- 本次修改前确认官方源码目录 `D:/OneDrive/DST/scripts` 只读；没有修改其中任何文件，也没有全局安装 Lua、Python 包或其他工具。日志文件沿用已纠正的 `docs/base-implementation-logs.md` 路径。
+
+#### 实现内容
+
+- `scripts/agon/core/participant.lua`：增加 Participant 的 group ID 查询、加入、移除和成员判断。
+- `scripts/agon/core/participant_group.lua`：新增 Instance 内 ParticipantGroup；校验 member 必须属于同一 Instance，支持 group type、ACTIVE/CLOSED 生命周期、leader、成员元数据、可序列化 snapshot，以及同步 Participant group IDs；跨 Instance 返回 `GROUP_PARTICIPANT_INSTANCE_MISMATCH`。
+- `scripts/agon/services/common_service_registry.lua`：新增稳定 service name/version/dependency 声明校验、未知服务/重复服务/版本不合法/缺失依赖拒绝、拓扑创建顺序和统一关闭；未声明的 service 不创建对应状态、task、listener、RPC 或保存数据。
+- `scripts/agon/services/phase_service.lua`：实现 PREPARING、ACTIVE、RESOLVING、TRANSITIONING、ENDED，phase revision、子 PhaseScope、scope task/listener 注册和关闭清理。
+- `scripts/agon/services/clock_service.lua`：保存 semantic deadline/duration，支持仅针对目标 service/Instance/Phase 的 pause/resume，并随 phase revision 记录和导出状态。
+- `scripts/agon/services/decision_service.lua`：实现 `PLAYER_PRIVATE`、`GROUP_VOTE`、`GROUP_LEADER`、`INSTANCE_VOTE`、`SERVER_AUTO`，包含 `ABSTAIN`、eligible voters、重复 request/vote 拒绝、expected revision/phase revision 校验、deadline、冻结和幂等 resolve；`PLURALITY_RANDOM_TIE` 使用 Instance 的命名 `decision` RNG stream，弃权时从全部候选选择。
+- `scripts/agon/services/effect_service.lua`：实现 source、target、scope、handler、priority、stack policy、Apply/Remove 和 scope cleanup；增加 stale phase revision 拒绝。Test handler 只操作 TestMode 私有计数，不定义攻击或料理属性。
+- `scripts/agon/services/score_ledger.lua`：使用唯一 `event_id`，按 Participant/Group/Instance 汇总，重复 event 拒绝，freeze 后拒绝新增。
+- `scripts/agon/core/instance.lua`、`scripts/agon/core/instance_manager.lua`：接入 service/group 的创建、查询、snapshot、关闭和失败回收；Instance 销毁时按 service/group/root scope/Zone 顺序清理，失败 Zone 进入隔离路径。
+- `scripts/agon/modes/mode_registry.lua`：注册 Mode 时复用 CommonServiceRegistry 校验 service declaration 和依赖。
+- `scripts/agon/modes/test_mode/definition.lua`、`runtime.lua`、`decisions.lua`、`effects.lua`、`wp5_diagnostics.lua`：声明 Phase/Clock/Decision/Effect/Score，创建 `COOP_TEST` group，运行两阶段、Group vote、Effect 和多条 ScoreEvent，并覆盖隔离、scope 清理、时钟、平票 RNG、声明校验、重复诊断和收口。
+- `scripts/components/agon_runtime.lua`、`scripts/agon/debug/diagnostics.lua`、`modmain.lua`：接入 Common Services、GROUP audience resolver、WP5 diagnostic 入口和结果导出；没有新增未经官方 API 核对的网络端点。
+- `scripts/agon/core/instance_manager.lua` 另整理了已确认的 root scope cleanup 缩进，不改变行为。
+
+#### 官方 API 核对
+
+- 修改前核对 `D:/OneDrive/DST/scripts/entityscript.lua`：`EntityScript:ListenForEvent`（约 1188 行）、`RemoveEventCallback`（约 1223 行）、`DoPeriodicTask`（约 1512 行）和 `DoTaskInTime`（约 1522 行），确认 PhaseScope 使用的 listener/task 注册和移除签名及官方时间调度路径。
+- 核对 `D:/OneDrive/DST/scripts/usercommands.lua`：`RunTextUserCommand`（约 418 行）、serverfn 执行路径（约 339–343、468–474 行）和 `AddUserCommand`（约 516 行）；诊断入口沿用正式服务器命令/远程控制路径。
+- 核对 `D:/OneDrive/DST/scripts/networkclientrpc.lua`：`AddModRPCHandler`（约 1834 行）和 `SendModRPCToServer`（约 1881 行）。WP5 未新增 RPC 业务接口，沿用 WP4 已核对的 sender、membership、revision 和 request ID 边界。
+- 未修改官方源码，未依赖 `GLOBAL.assert` 绕过运行时问题；服务声明和业务失败均使用显式错误码返回。
+
+#### 首次诊断失败及修复
+
+- 第一次官方 WP5 诊断运行已成功加载地图，但诊断在 `wp5_diagnostics.lua:327` 失败，原文为：
+
+  ```text
+  [TheAgon] [WP5 diagnostic exception: ...]:327: attempt to index field 'ERROR_CODES' (a nil value)
+  ```
+
+- 原因是诊断脚本把模块级 `DecisionService.ERROR_CODES` 当成 service 实例字段读取；这不是官方 `assert` 缺失，也不是服务实现的运行时错误。修复为显式 require `decision_service.lua`/`score_ledger.lua` 模块并读取模块常量。
+- 随后的诊断修正了 Effect 计数期望值（scope cleanup 后应为 1）和 tie RNG counter 断言（比较诊断前后 `decision` stream counter +1），并给 EffectService 增加 stale phase revision 检查。入口可在同一服务器重复执行。
+
+#### 官方 Test/World01 环境
+
+- 官方游戏 build：`747465`。
+- 官方专服可执行文件：
+
+  ```text
+  D:/SteamLibrary/steamapps/common/Don't Starve Together/bin64/dontstarve_dedicated_server_nullrenderer_x64.exe
+  ```
+
+- 启动参数：
+
+  ```text
+  -persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01
+  ```
+
+- `D:/SteamLibrary/steamapps/common/Don't Starve Together/mods/the-agon` 已确认指向 `D:/OneDrive/DST/the-agon`；Master 使用 server port `12000`、shard port `11889`。
+- 服务器必须从官方 `bin64` 工作目录启动；从 `D:/OneDrive/DST` 启动会因相对资源路径缺失而立即失败，本次后续运行均使用官方 bin64 工作目录。
+
+#### WP5 诊断与两局隔离
+
+- 修复首次诊断错误后，官方 Test/World01 运行连续完成两次 WP5 diagnostics，均输出：
+
+  ```text
+  [TheAgon] [WP5_TEST_PASS] ... WP5 diagnostics passed
+  ```
+
+- 诊断覆盖两局 Instance 的 service/group 隔离、Phase/Clock、GROUP audience、Group vote eligibility/idempotency、过期 revision、Effect handler/scope 清理、Score 重复 event/freeze、PhaseScope task/listener 清理、命名 RNG tie 复现且不消耗 loot/scene stream，以及 CommonServiceRegistry 的未知 service、重复 service、缺失依赖和非法 version 拒绝。
+- 多次重复运行后的正式收口输出为：
+
+  ```text
+  WP5_CLEANUP 0 10 10 true nil
+  ```
+
+  即没有活动 Instance、10 个 Zone 全部可用、`ValidateCore=true`、无 cleanup 错误。
+
+#### 跨重启存档验证
+
+- 先在干净 Test/World01 中创建并启动活动 Instance，保存并正常关服；关键探针为：
+
+  ```text
+  WP5_RESTART_CREATED agon:1:1 INSTANCE_CREATED PREPARING true
+  WP5_RESTART_STARTED true nil RUNNING phase_1 2 small_01
+  WP5_ACTIVE_SCENE_TILE 1 4 4
+  WP5_RESTART_SNAPSHOT ... 5 true true true true true RUNNING
+  ```
+
+  这确认了 5 个启用 service、活动 Phase 和 `small_01` Scene 状态进入存档。
+- 第一次重启复核曾在 `VOID_TILE_MISMATCH tile_x=39 tile_z=259` 处失败。该坐标不是随机损坏：`small_01` 中心为 `(45,265)`、build size 为 13，边界最小点正是 `(39,259)`；TestMode 的合法 initial scene 会把该区域写成 DIRT，而旧逻辑在已有保存布局重启时仍执行首次世界生成用的全图 IMPASSABLE void 基线扫描，因此误把合法持久化场景判为错误。
+- 已修正 `AgonRuntime:InitializeLayout`：仅在没有 `saved_layout` 的首次世界生成执行全图 void 基线扫描；重启仍校验 Portal、大厅和保存布局兼容性，并将日志信息区分为 `hall and void validation passed` 与 `hall and saved layout validation passed`。这是针对保存场景地形的边界修复，不是放宽首次生成保护。
+- 修复后的活动存档重启输出为：
+
+  ```text
+  CORE_READY ... instance_count=0 ... aborted_instance_count=1
+  WP5_RESTART_RECOVERED 0 1 10 10 READY READY
+  WP5_RESTART_VALIDATE true nil
+  ```
+
+  即 `ABORT_ON_RESTART` 能识别并中止 active Instance，重启后没有活动局、10 个 Zone 可用且 Core 校验通过。
+- 该次重启后专门继续执行 WP5 diagnostics，暴露出后续边界而非隐藏失败：
+
+  ```text
+  [TheAgon] [WP5 diagnostic cleanup failed] ...
+  WP5_AFTER_RESTART_DIAG 1 9 10 true nil 1
+  WP5_RESTART_CLEANUP_RETRY false SCENE_RESET_FAILED
+  ```
+
+  原因是当前 `ABORT_ON_RESTART` 已中止并丢弃运行时 Instance 对象，但尚未实现 WP9 要求的持久化活动 Scene entity、Scope、SceneTransaction 和 Zone Tile 全量清理；旧场景实体/地形仍存在时，新诊断局清理失败，Zone 被 `QUARANTINED`。这不是 WP5 通过项，已写入 plan 的 WP9 step 4，后续必须在那里完成。
+- 为避免把失败场景留在 Test 存档中，按项目规则仅对 `Test/World01` 使用 `c_regenerateworld()` 重建测试世界；重建前保留了 `D:/OneDrive/DST/klei/DoNotStarveTogether/Test/World01/backup/wp5-cross-restart-before-regenerate-20260902` 备份。命令曾报告打开文件导致的 `DelDirectory ... FAILED`，但随后成功生成新的 clean session；没有删除该备份或其他用户数据。
+- 重建后的干净世界中重新运行 WP5 diagnostics 两次，均通过；随后 `c_shutdown()` 正常保存并退出。最终追加启动复核（最终 source 分支）输出：
+
+  ```text
+  [TheAgon] [LAYOUT_READY] ... WorldLayout resolved; hall and saved layout validation passed
+  [TheAgon] [CORE_READY] ... instance_count=0 zone_count=10 free_zone_count=10 aborted_instance_count=0
+  WP5_FINAL_RELOAD READY READY 0 0 10 10 true nil
+  ```
+
+  最终关服完成两次 world serialization，目标专服进程已不存在，端口 `12000`/`11889` 均无监听。
+
+#### 已知官方警告与错误扫描
+
+- 以下两条官方 set-piece angle 警告仍会出现，按用户决定和既有 plan 延后，不在 WP5 伪造实体或修改官方 manager：
+
+  ```text
+  ERROR: hermitcrab_relocation_manager expected to be able to calculate the set piece angle using monkeyqueen and monkeyportal but found neither of these.
+  ERROR: wagpunk_arena_manager expected to be able to calculate the set piece angle using hermitcrab_marker and beebox_hermit but found neither of these.
+  ```
+
+- 日志中已保留首次诊断的 `ERROR_CODES` nil 错误和跨重启 `SCENE_RESET_FAILED` 边界；它们分别已修复或明确归入 WP9。最终 clean reload 未新增 `attempt to`、`nil value`、`bad argument`、`LUA ERROR` 或 `stack traceback`；除上述两条既有官方 set-piece warning 外，服务加载、诊断和关服均正常。
+
+#### 验证、文档与交付状态
+
+- `git diff --check` 通过；仅有 Git 关于工作树 LF/CRLF 转换的提示，没有 whitespace error。
+- PATH 中没有 `lua`/`luac`，因此未进行独立 Lua parser 检查，也没有为此全局安装工具；官方专服成功加载全部新增模块并完成运行诊断，承担了 Lua 模块加载和 DST API 兼容验证。
+- `docs/base-implementation-plan.md` 已增加 WP5 完成状态、覆盖范围、跨重启证据、WP9 清理边界和未覆盖项；WP1 set-piece warnings 继续保持延后记录。
+- 未覆盖：真实双客户端和客户端 UI/复制视觉链路、跨 shard 运行、正式玩法、完整 entity/Scene/Zone cleanup、在线/离线玩家恢复、完整恢复队列和后端 settlement。这些不应被本次 TestMode service diagnostics 冒充完成；活动 Scene 的完整清理和真实恢复仍等待 WP9。
+- 本次没有 commit、push、分支操作，也没有修改官方源码。当前工作树同时包含保留的 WP4 修改与本次 WP5 修改，建议中文 Conventional Commit：
+
+  ```text
+  feat(services): 增加 ParticipantGroup 与通用玩法服务
+  ```
+
+- 进入条件：WP5 验收项和官方 Test/World01 的服务隔离、诊断、清洁重启复核已完成；可以进入 WP6/WP7 的后续开发，但 WP9 必须接收并重新验收本日志记录的活动 Scene 持久化清理边界，WP10 仍需真实客户端和完整跨系统验收。

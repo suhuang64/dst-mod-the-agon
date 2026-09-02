@@ -1,6 +1,7 @@
 -- WP2：GameMode 定义注册表。
 
 local ModeRegistry = {}
+local CommonServiceRegistry = require("agon/services/common_service_registry")
 ModeRegistry.SCHEMA_VERSION = 1
 
 ModeRegistry.VALID_ZONE_CATEGORIES =
@@ -10,9 +11,7 @@ ModeRegistry.VALID_ZONE_CATEGORIES =
     LARGE = true,
 }
 
--- WP2 尚未实现 Common Services，因此这里只允许空 services 列表。
--- 后续 WP 实现服务后再通过代码增量开放对应名称。
-ModeRegistry.SUPPORTED_SERVICES = {}
+ModeRegistry.SUPPORTED_SERVICES = CommonServiceRegistry.SUPPORTED_SERVICES
 
 ModeRegistry.ERROR_CODES =
 {
@@ -72,19 +71,9 @@ function ModeRegistry.ValidateDefinition(definition)
         return false, ModeRegistry.ERROR_CODES.INVALID_MODE
     end
 
-    local seen_services = {}
-    for index = 1, #services do
-        local service = services[index]
-        if not IsNonEmptyString(service) then
-            return false, ModeRegistry.ERROR_CODES.UNKNOWN_SERVICE
-        end
-        if seen_services[service] then
-            return false, ModeRegistry.ERROR_CODES.DUPLICATE_SERVICE
-        end
-        if not ModeRegistry.SUPPORTED_SERVICES[service] then
-            return false, ModeRegistry.ERROR_CODES.UNKNOWN_SERVICE
-        end
-        seen_services[service] = true
+    local services_valid, services_code = CommonServiceRegistry.ValidateDeclarations(services)
+    if services_valid == nil then
+        return false, services_code
     end
     return true
 end

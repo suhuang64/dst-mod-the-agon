@@ -908,6 +908,14 @@ scripts/agon/modes/test_mode/runtime.lua
 feat(services): 实现分组与可选通用玩法服务
 ```
 
+### WP5 当前状态（2026-09-02）
+
+- 状态：已完成；ParticipantGroup、Common Services、TestMode 诊断和官方 Test/World01 运行验证已完成。
+- 已覆盖：两局服务隔离；Phase/Clock/Decision/Effect/Score；GROUP audience；PhaseScope 清理；RNG 平票选择；服务声明验证；重复运行和干净世界收口。
+- 跨重启：已验证活动 Instance 存档可被 `ABORT_ON_RESTART` 识别并中止，重启后 `instance_count=0`、`aborted_instance_count=1`、10 个 Zone 可用且 `ValidateCore=true`；为允许持久化 Zone 场景地形，重启时不重复执行首次世界生成的全图 void 基线扫描，仍校验 Portal、大厅和保存布局。
+- 边界：活动 Scene 的实体/地形清理在当前跨重启后仍会使新实例清理进入 `SCENE_RESET_FAILED`/`QUARANTINED`，属于 WP9 的 entity/Scope/SceneTransaction/Zone Tile cleanup；完整恢复和真实玩家恢复不在 WP5。
+- 未覆盖：真实双客户端/UI、跨 shard、正式玩法；WP1 set-piece warnings 继续按既有计划延后。
+
 ---
 
 ## WP6：EntityProfileService
@@ -1109,6 +1117,8 @@ scripts/agon/debug/diagnostics.lua
 2. OnSave 不保存 function、entity reference、task handle、Spectator session 或 UI 状态。
 3. OnLoad 发现 active Instance 时统一 `RECOVERING → DESTROYING`，不恢复玩法。
 4. 清理 entity、Scope、SceneTransaction 和 Zone Tile；失败 Zone 进入 QUARANTINED。
+
+   WP5 官方跨重启验证已暴露活动 Scene 的持久化实体/地形清理边界：`ABORT_ON_RESTART` 本身可完成，但后续新实例销毁旧场景时可能返回 `SCENE_RESET_FAILED` 并隔离 Zone。本项必须在 WP9 实现完整清理后重新验收。
 5. 在线玩家立即恢复；离线玩家重连时先恢复再进入大厅。
 6. RPC 收口全部 operation 的 lifecycle、generation、revision、audience、membership、request ID 和 rate limit。
 7. BackendAdapter 第一版只定义 `SubmitGameResult`、`SubmitSettlement`；未配置 transport 时返回明确的 `NOT_CONFIGURED` 并保留 pending，或使用仅记录、不返回成功的测试 adapter，不能伪造提交成功。

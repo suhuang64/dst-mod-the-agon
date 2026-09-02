@@ -5,12 +5,14 @@ local LobbyService = require("agon/world/lobby_service")
 local ZoneManager = require("agon/core/zone_manager")
 local InstanceManager = require("agon/core/instance_manager")
 local ModeRegistry = require("agon/modes/mode_registry")
+local CommonServiceRegistry = require("agon/services/common_service_registry")
 local TestModeDefinition = require("agon/modes/test_mode/definition")
 local SceneService = require("agon/world/scene_service")
 local AudienceStateChannel = require("agon/net/audience_state_channel")
 local Rpc = require("agon/net/rpc")
 local Classified = require("agon/net/classified")
 local Wp4Diagnostics = require("agon/modes/test_mode/wp4_diagnostics")
+local Wp5Diagnostics = require("agon/modes/test_mode/wp5_diagnostics")
 
 local function IsNonEmptyString(value)
     return type(value) == "string" and value ~= ""
@@ -71,6 +73,7 @@ local AgonRuntime = Class(function(self, inst)
     self.core_failure_code = nil
     self.zone_manager = nil
     self.mode_registry = nil
+    self.common_service_registry = nil
     self.scene_service = nil
     self.instance_manager = nil
     self.audience_state_channel = nil
@@ -195,6 +198,7 @@ function AgonRuntime:FailCore(code, message, context)
     self.core_failure_code = code
     self.zone_manager = nil
     self.mode_registry = nil
+    self.common_service_registry = nil
     self.scene_service = nil
     self.instance_manager = nil
     self.audience_state_channel = nil
@@ -235,6 +239,14 @@ function AgonRuntime:InitializeCore()
         )
     end
 
+    local common_service_registry = CommonServiceRegistry.New()
+    if common_service_registry == nil then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "CommonServiceRegistry initialization failed"
+        )
+    end
+
     local scene_service, scene_code = SceneService.New(
     {
         world = self.inst,
@@ -256,6 +268,7 @@ function AgonRuntime:InitializeCore()
         mode_registry = mode_registry,
         scene_service = scene_service,
         world = self.inst,
+        common_service_registry = common_service_registry,
     })
     if instance_manager == nil then
         return self:FailCore(
@@ -268,6 +281,13 @@ function AgonRuntime:InitializeCore()
     {
         resolve_instance_for_userid = function(userid)
             return instance_manager:GetParticipantInstanceId(userid)
+        end,
+        resolve_groups_for_userid = function(userid)
+            local participant = instance_manager:GetParticipant(userid)
+            if participant == nil then
+                return {}
+            end
+            return participant:GetGroupIds()
         end,
     })
     local rpc, rpc_code = Rpc.New(
@@ -297,6 +317,7 @@ function AgonRuntime:InitializeCore()
 
     self.zone_manager = zone_manager
     self.mode_registry = mode_registry
+    self.common_service_registry = common_service_registry
     self.scene_service = scene_service
     self.instance_manager = instance_manager
     self.audience_state_channel = audience_state_channel
@@ -320,7 +341,7 @@ function AgonRuntime:InitializeCore()
             instance_count = instance_summary.instance_count,
             aborted_instance_count = instance_summary.restart_aborted_count,
         },
-        "ZoneManager, InstanceManager, isolation and TestMode scene services ready"
+        "ZoneManager, InstanceManager, Common Services, isolation and TestMode ready"
     )
     return true
 end
@@ -484,23 +505,28 @@ function AgonRuntime:InitializeLayout()
         )
     end
 
-    local void_valid, void_code, void_context = LobbyService.ValidateVoidTiles(
-        map,
-        map_width,
-        map_height,
-        { x = portal_tile_x, z = portal_tile_z }
-    )
-    if not void_valid then
-        void_context = void_context or {}
-        void_context.map_width = map_width
-        void_context.map_height = map_height
-        void_context.portal_tile_x = portal_tile_x
-        void_context.portal_tile_z = portal_tile_z
-        return self:FailLayout(
-            Diagnostics.ERROR_CODES.VOID_TILE_MISMATCH,
-            "void Tile validation failed: " .. tostring(void_code),
-            void_context
+    -- 首次世界生成要求大厅之外保持 IMPASSABLE；重启时 Zone 场景可能已经
+    -- 持久化写入合法地皮，因此只复核 Portal、大厅和保存布局兼容性。
+    local void_validation_performed = self.saved_layout == nil
+    if void_validation_performed then
+        local void_valid, void_code, void_context = LobbyService.ValidateVoidTiles(
+            map,
+            map_width,
+            map_height,
+            { x = portal_tile_x, z = portal_tile_z }
         )
+        if not void_valid then
+            void_context = void_context or {}
+            void_context.map_width = map_width
+            void_context.map_height = map_height
+            void_context.portal_tile_x = portal_tile_x
+            void_context.portal_tile_z = portal_tile_z
+            return self:FailLayout(
+                Diagnostics.ERROR_CODES.VOID_TILE_MISMATCH,
+                "void Tile validation failed: " .. tostring(void_code),
+                void_context
+            )
+        end
     end
 
     if self.saved_layout ~= nil
@@ -540,7 +566,9 @@ function AgonRuntime:InitializeLayout()
             map_width = map_width,
             map_height = map_height,
         },
-        "WorldLayout resolved; hall and void validation passed"
+        void_validation_performed
+            and "WorldLayout resolved; hall and void validation passed"
+            or "WorldLayout resolved; hall and saved layout validation passed"
     )
     return true
 end
@@ -729,6 +757,23 @@ function AgonRuntime:RunWP4Diagnostics()
             core_status = self.core_status,
         },
         passed and "WP4 isolation diagnostics passed" or tostring(code)
+    )
+    return passed, code
+end
+
+function AgonRuntime:RunWP5Diagnostics()
+    if not self:IsReady() then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local passed, code = Wp5Diagnostics.Run(self)
+    Diagnostics.Log(
+        passed and Diagnostics.RESULTS.WP5_TEST_PASS or code,
+        {
+            shard_id = self.shard_id,
+            operation = "wp5_diagnostics",
+            core_status = self.core_status,
+        },
+        passed and "WP5 common services diagnostics passed" or tostring(code)
     )
     return passed, code
 end

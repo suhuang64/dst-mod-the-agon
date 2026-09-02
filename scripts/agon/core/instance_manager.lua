@@ -3,6 +3,7 @@
 local Instance = require("agon/core/instance")
 local Participant = require("agon/core/participant")
 local RulePolicy = require("agon/core/rule_policy")
+local CommonServiceRegistry = require("agon/services/common_service_registry")
 
 local InstanceManager = {}
 InstanceManager.SCHEMA_VERSION = 1
@@ -103,6 +104,8 @@ function InstanceManager.New(options)
         scene_service = options.scene_service,
         world = options.world,
         now_fn = options.now_fn,
+        common_service_registry = options.common_service_registry
+            or CommonServiceRegistry.New(),
         instances_by_id = {},
         instance_order = {},
         destroyed_ids = {},
@@ -366,6 +369,19 @@ function InstanceManager.Create(self, mode_id, userids)
         return nil, instance_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
     end
 
+    local services_initialized, services_code = instance:InitializeServices(
+        self.common_service_registry,
+        definition.services,
+        { now_fn = self.now_fn }
+    )
+    if not services_initialized then
+        if instance.root_scope ~= nil and not instance.root_scope:IsClosed() then
+            instance.root_scope:Close("service_create_failed")
+        end
+        self.zone_manager:ReleaseReservation(zone.zone_id, instance_id)
+        return nil, services_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
+    end
+
     self.instances_by_id[instance_id] = instance
     table.insert(self.instance_order, instance_id)
 
@@ -378,6 +394,8 @@ function InstanceManager.Create(self, mode_id, userids)
             RemoveInstanceParticipants(self, instance)
             self.instances_by_id[instance_id] = nil
             RemoveFromOrder(self, instance_id)
+            instance:CloseServices("participant_create_failed")
+            instance:CloseGroups("participant_create_failed")
             instance.root_scope:Close("participant_create_failed")
             self.zone_manager:ReleaseReservation(zone.zone_id, instance_id)
             return nil, participant_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
@@ -390,6 +408,8 @@ function InstanceManager.Create(self, mode_id, userids)
             RemoveInstanceParticipants(self, instance)
             self.instances_by_id[instance_id] = nil
             RemoveFromOrder(self, instance_id)
+            instance:CloseServices("scene_attach_failed")
+            instance:CloseGroups("scene_attach_failed")
             instance.root_scope:Close("scene_attach_failed")
             self.zone_manager:ReleaseReservation(zone.zone_id, instance_id)
             return nil, attach_code or InstanceManager.ERROR_CODES.INSTANCE_CREATE_FAILED
@@ -401,6 +421,8 @@ function InstanceManager.Create(self, mode_id, userids)
         RemoveInstanceParticipants(self, instance)
         self.instances_by_id[instance_id] = nil
         RemoveFromOrder(self, instance_id)
+        instance:CloseServices("prepare_failed")
+        instance:CloseGroups("prepare_failed")
         if self.scene_service ~= nil then
             self.scene_service:DetachInstance(instance)
         end
@@ -617,6 +639,24 @@ function InstanceManager.Destroy(self, instance_id, reason)
     end
 
     if self.scene_service ~= nil then
+        local services_closed, services_code = instance:CloseServices(reason or "destroy")
+        if not services_closed then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "service_cleanup_failed:" .. tostring(services_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+        local groups_closed, groups_code = instance:CloseGroups(reason or "destroy")
+        if not groups_closed then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "group_cleanup_failed:" .. tostring(groups_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
         local reset, reset_code = self.scene_service:Reset(instance, reason or "destroy")
         if not reset then
             self.zone_manager:Quarantine(
@@ -626,15 +666,35 @@ function InstanceManager.Destroy(self, instance_id, reason)
             )
             return false, InstanceManager.ERROR_CODES.SCENE_RESET_FAILED
         end
-    elseif instance.root_scope ~= nil and not instance.root_scope:IsClosed() then
-        local scope_closed, scope_code = instance.root_scope:Close(reason or "destroy")
-        if not scope_closed then
+    else
+        local services_closed, services_code = instance:CloseServices(reason or "destroy")
+        if not services_closed then
             self.zone_manager:Quarantine(
                 instance.zone_id,
                 instance.instance_id,
-                "scope_cleanup_failed:" .. tostring(scope_code)
+                "service_cleanup_failed:" .. tostring(services_code)
             )
             return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+        local groups_closed, groups_code = instance:CloseGroups(reason or "destroy")
+        if not groups_closed then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "group_cleanup_failed:" .. tostring(groups_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+        if instance.root_scope ~= nil and not instance.root_scope:IsClosed() then
+            local scope_closed, scope_code = instance.root_scope:Close(reason or "destroy")
+            if not scope_closed then
+                self.zone_manager:Quarantine(
+                    instance.zone_id,
+                    instance.instance_id,
+                    "scope_cleanup_failed:" .. tostring(scope_code)
+                )
+                return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+            end
         end
     end
 
@@ -787,6 +847,34 @@ function InstanceManager.Validate(self)
         for userid, participant in pairs(instance.participants) do
             if not participant_order_seen[userid] or participant == nil
                 or self.participants_by_userid[userid] ~= participant then
+                return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+        end
+        local group_order_seen = {}
+        for group_index = 1, #(instance.participant_group_order or {}) do
+            local group_id = instance.participant_group_order[group_index]
+            local group = instance.participant_groups[group_id]
+            if not IsNonEmptyString(group_id)
+                or group == nil
+                or group.instance_id ~= instance.instance_id
+                or group_order_seen[group_id] then
+                return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+            group_order_seen[group_id] = true
+        end
+        for group_id, group in pairs(instance.participant_groups or {}) do
+            if not group_order_seen[group_id]
+                or group == nil
+                or group.instance_id ~= instance.instance_id then
+                return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+        end
+        for service_index = 1, #(instance.service_order or {}) do
+            local service_id = instance.service_order[service_index]
+            local service = instance.services[service_id]
+            if not IsNonEmptyString(service_id)
+                or service == nil
+                or service.service_id ~= service_id then
                 return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
             end
         end

@@ -213,6 +213,15 @@ if GetModConfigData("enable_agon") == true then
     )
 
     RegisterAgonAdminCommand(
+        "agon.test.wp5",
+        {},
+        "运行 The Agon WP5 的分组、阶段、时钟、投票、Effect 和 Score 诊断。",
+        function(runtime)
+            runtime:RunWP5Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
         "agon.destroy_instance",
         { "instance_id" },
         "按正式销毁 pipeline 销毁一个 The Agon Instance。",
