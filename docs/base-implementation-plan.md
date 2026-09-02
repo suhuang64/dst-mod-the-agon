@@ -1264,8 +1264,9 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - WP9 已完成官方 `Test/World01` 的 WP4–WP9 服务端回归、活动 Instance 跨重启中止、Scene/Zone 清理、pending restore snapshot 保留和 `ValidateCore=true`；这些证据不替代真实客户端发布门。
 - 本轮已在官方 `Test/World01` 完成一次 WP10 服务端预检：`enable_agon=false` 时世界正常启动但没有新的 `LAYOUT_READY`/`CORE_READY`；恢复 true 后 `WP4_TEST_PASS`–`WP9_TEST_PASS`、`WP10_VALIDATE:true` 和 `instances=0/zones=10/restores=0/backend_pending=0/errors=0` 均通过。直接把 `agon.test.*` 输进 `RemoteCommandInput` 会产生入口格式错误，验收脚本已改为已验证的 Runtime 表达式。
 - 已新增 [WP10 客户端验收脚本](wp10-client-acceptance.md)，包含真实 A/B 身份记录、双 Instance、Scene、PlayerSandbox、Spectator、死亡策略、四阶段重启、`enable_agon=false` 和故障注入结果表。维护者每次执行后的结果必须继续追加到 `docs/base-implementation-logs.md`。
-- 当前真实玩家接入会被 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED` 拒绝；本轮没有绕过或放宽该安全门，也没有伪造 UI/StateGraph/跨 shard 结果。是否增加仅限 Test/World01 的严格测试开关，必须单独确认后才能实现。
-- 在真实双客户端/UI、真实玩家逐字段恢复、四阶段重启矩阵、单 shard 安全证据和维护者结果返回前，WP10 不得进入 Base Ready。
+- 已实现仅限当前 Test/World01 的真实玩家验收开关：不新增公开配置项；官方 `ADMIN` 命令 `/agon.test.player_sandbox on|off|status` 只在专服、权威模拟、固定 Cluster 名称/描述和 `TheShard:GetShardId() == 1` 同时满足时允许开启。开关只存在内存、默认关闭；开启只传给后续新建的 `TEST_MODE` Instance，关闭会撤销现有 Instance 的 live 测试权限，重启不会继承。
+- 官方运行时已验证资格状态 `enabled=false eligible=true`、命令已注册且 `permission=ADMIN`，并验证关闭态 Instance 为 `allow_live_mutation=false`、开启后新 Instance 为 `true`；这只是安全门传播证据，不替代真实客户端/UI/StateGraph/逐字段恢复结果。
+- 已补做跨重启安全证据：开关开启后停服生成 snapshot `#47/#48`，同一 `Test/World01` 重启加载 `#48` 后 Runtime 输出 `enabled=false eligible=true`、`live_player_test=off`；说明开关不进入存档。服务端安全开关证据已完成，但在真实双客户端/UI、真实玩家逐字段恢复、四阶段重启矩阵和维护者结果返回前，WP10 仍不得进入 Base Ready。
 
 ### 建议 Commit
 

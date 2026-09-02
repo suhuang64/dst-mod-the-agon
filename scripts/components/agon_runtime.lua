@@ -17,6 +17,7 @@ local PersistenceSchema = require("agon/persistence/schema")
 local PersistenceMigrations = require("agon/persistence/migrations")
 local RestoreQueue = require("agon/player/restore_queue")
 local BackendAdapter = require("agon/backend/backend_adapter")
+local TestGate = require("agon/debug/test_gate")
 local Wp4Diagnostics = require("agon/modes/test_mode/wp4_diagnostics")
 local Wp5Diagnostics = require("agon/modes/test_mode/wp5_diagnostics")
 local Wp6Diagnostics = require("agon/modes/test_mode/wp6_diagnostics")
@@ -149,6 +150,8 @@ local AgonRuntime = Class(function(self, inst)
     self.rpc = nil
     self.restore_queue = nil
     self.backend_adapter = nil
+    -- 真实玩家验收开关只存在于当前进程内，默认关闭且绝不进入 Runtime snapshot。
+    self.live_player_test_enabled = false
     self.recovery_summary =
     {
         aborted = 0,
@@ -1547,7 +1550,60 @@ function AgonRuntime:CreateInstance(mode_id, userids, options)
     if not self:IsReady() then
         return nil, Diagnostics.ERROR_CODES.CORE_NOT_READY
     end
-    return self.instance_manager:Create(mode_id, userids, options)
+    options = type(options) == "table" and options or {}
+    local create_options = {}
+    for key, value in pairs(options) do
+        create_options[key] = value
+    end
+    -- 只把当前 Runtime 的内存态开关传给 TestMode；调用方传入同名 option
+    -- 不能自行打开真实玩家修改权限，重启恢复路径也不会重新得到该权限。
+    create_options.allow_live_player_test = mode_id == "TEST_MODE"
+        and self.live_player_test_enabled == true
+    return self.instance_manager:Create(mode_id, userids, create_options)
+end
+
+function AgonRuntime:CanUseLivePlayerTest()
+    local eligible = TestGate.IsEligible(self.inst)
+    return eligible
+end
+
+function AgonRuntime:SetLivePlayerTestEnabled(enabled)
+    if type(enabled) ~= "boolean" then
+        return false, Diagnostics.ERROR_CODES.PLAYER_SANDBOX_TEST_ACTION_INVALID
+    end
+    if enabled then
+        local eligible, code = TestGate.IsEligible(self.inst)
+        if not eligible then
+            return false, code or Diagnostics.ERROR_CODES.PLAYER_SANDBOX_TEST_CONTEXT_REQUIRED
+        end
+    end
+    self.live_player_test_enabled = enabled
+    if not enabled
+        and self.instance_manager ~= nil
+        and type(self.instance_manager.List) == "function" then
+        -- 关闭开关时立即撤销现有 TestMode service 的 live 权限；开启只影响
+        -- 后续新建 Instance，避免把已存在的空 Instance 意外放行。
+        for _, instance in ipairs(self.instance_manager:List()) do
+            local sandbox = instance ~= nil and instance:GetService("player_sandbox") or nil
+            if sandbox ~= nil and type(sandbox.SetLivePlayerTestEnabled) == "function" then
+                sandbox:SetLivePlayerTestEnabled(false)
+            end
+        end
+    end
+    return true, enabled
+        and Diagnostics.RESULTS.PLAYER_TEST_ENABLED
+        or Diagnostics.RESULTS.PLAYER_TEST_DISABLED
+end
+
+function AgonRuntime:GetLivePlayerTestStatus()
+    local eligible, code, context = TestGate.IsEligible(self.inst)
+    return
+    {
+        enabled = self.live_player_test_enabled == true,
+        eligible = eligible == true,
+        code = code,
+        context = context,
+    }
 end
 
 function AgonRuntime:StartInstance(instance_id, reason)
@@ -1723,8 +1779,10 @@ function AgonRuntime:GetDebugString()
     local backend_pending_count = self.backend_adapter ~= nil
         and self.backend_adapter:GetPendingCount()
         or 0
+    local live_player_test = self.live_player_test_enabled == true and "on" or "off"
+    local test_context = TestGate.IsEligible(self.inst) and "eligible" or "ineligible"
     return string.format(
-        "schema=%d shard=%s boot=%d layout=%s v=%d core=%s offset=%s,%s resolved=%s,%s world=%s,%s instances=%d zones=%d restores=%d backend_pending=%d errors=%d",
+        "schema=%d shard=%s boot=%d layout=%s v=%d core=%s offset=%s,%s resolved=%s,%s world=%s,%s instances=%d zones=%d restores=%d backend_pending=%d errors=%d live_player_test=%s test_context=%s",
         self.schema_version,
         self.shard_id,
         self.boot_generation,
@@ -1741,7 +1799,9 @@ function AgonRuntime:GetDebugString()
         zone_count,
         pending_restore_count,
         backend_pending_count,
-        error_count
+        error_count,
+        live_player_test,
+        test_context
     )
 end
 

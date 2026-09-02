@@ -66,7 +66,7 @@ local function GetAgonRuntime()
     return world.components.agon_runtime
 end
 
-local function RegisterAgonAdminCommand(name, params, description, handler)
+local function RegisterAgonAdminCommand(name, params, description, handler, accessfn)
     if type(AddUserCommand) ~= "function" then
         return
     end
@@ -81,10 +81,13 @@ local function RegisterAgonAdminCommand(name, params, description, handler)
         servermenu = true,
         params = params,
         vote = false,
-        hasaccessfn = function()
-            return GetModConfigData("enable_agon") == true
+        hasaccessfn = function(command, caller, targetid)
+            if GetModConfigData("enable_agon") ~= true then
+                return false
+            end
+            return accessfn == nil or accessfn(command, caller, targetid)
         end,
-        serverfn = function(command_params)
+        serverfn = function(command_params, caller)
             local runtime, runtime_code = GetAgonRuntime()
             if runtime == nil then
                 Diagnostics.Log(
@@ -94,7 +97,7 @@ local function RegisterAgonAdminCommand(name, params, description, handler)
                 )
                 return
             end
-            handler(runtime, command_params)
+            handler(runtime, command_params, caller)
         end,
     })
 end
@@ -255,6 +258,69 @@ if GetModConfigData("enable_agon") == true then
         "运行 The Agon WP9 的持久化、重启恢复队列和后端幂等边界诊断。",
         function(runtime)
             runtime:RunWP9Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
+        "agon.test.player_sandbox",
+        { "action" },
+        "仅在 Test/World01 临时允许真实玩家进入 PlayerSandbox；action 使用 on、off 或 status。",
+        function(runtime, params, caller)
+            local action = type(params.action) == "string"
+                and string.lower(params.action)
+                or ""
+            local caller_userid = caller ~= nil and caller.userid or "server"
+            if action == "on" or action == "off" then
+                local enabled, code = runtime:SetLivePlayerTestEnabled(action == "on")
+                Diagnostics.Log(
+                    code,
+                    {
+                        shard_id = runtime.shard_id,
+                        operation = "live_player_test_" .. action,
+                        userid = caller_userid,
+                    },
+                    enabled
+                        and (action == "on"
+                            and "Live player sandbox test enabled for new TestMode instances"
+                            or "Live player sandbox test disabled")
+                        or "Live player sandbox test switch rejected"
+                )
+                return
+            end
+            if action == "status" then
+                local status = runtime:GetLivePlayerTestStatus()
+                Diagnostics.Log(
+                    Diagnostics.RESULTS.PLAYER_TEST_STATUS,
+                    {
+                        shard_id = runtime.shard_id,
+                        operation = "live_player_test_status",
+                        userid = caller_userid,
+                    },
+                    "enabled=" .. tostring(status.enabled)
+                        .. " eligible=" .. tostring(status.eligible)
+                        .. " code=" .. tostring(status.code)
+                )
+                return
+            end
+            Diagnostics.Log(
+                Diagnostics.ERROR_CODES.PLAYER_SANDBOX_TEST_ACTION_INVALID,
+                {
+                    shard_id = runtime.shard_id,
+                    operation = "live_player_test_invalid_action",
+                    userid = caller_userid,
+                },
+                "Use action on, off or status"
+            )
+        end,
+        function()
+            -- 客户端需要看见这个管理员入口；真正执行时仍由服务端
+            -- Runtime 再次检查 Test/World01 指纹，不能依赖客户端判断。
+            local world = GLOBAL.TheWorld
+            if world == nil or world.ismastersim ~= true then
+                return true
+            end
+            local runtime = GetAgonRuntime()
+            return runtime ~= nil and runtime:CanUseLivePlayerTest()
         end
     )
 

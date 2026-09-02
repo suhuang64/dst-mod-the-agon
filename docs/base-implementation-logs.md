@@ -956,3 +956,39 @@ docs(base): 修正执行日志文件名
 - 修正 `docs/wp10-client-acceptance.md`：服务端专服控制台统一使用 Runtime 表达式，场景/启动/销毁示例不再要求直接输入未验证的 `agon.*` 字符串；明确当前真实玩家 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED` 安全边界。
 - `git diff --check` 和 Markdown code fence 检查通过；未修改官方源码，未全局安装工具，未执行 commit、push、分支切换或历史改写。
 - WP10 仍为“等待人工运行验收”：真实双客户端/UI、真实玩家逐字段恢复、四阶段重启矩阵、故障注入/QUARANTINED 修复、第二 shard/cross-shard、真实 Backend transport 和生产 UI 尚未完成。
+
+### 1.36 2026-09-02：WP10 Test/World01 真实玩家验收开关实现与跨重启安全验证
+
+#### 实现范围与安全边界
+
+- 按已确认的测试范围实现真实玩家验收开关：只允许官方 `Test/World01` 专服、默认关闭、仅官方 `ADMIN` UserCommand 暴露给管理员；没有新增 `modinfo.lua` 公共配置，没有修改正式玩法开关，也没有修改官方参考源 `D:\OneDrive\DST\scripts` 或服务器安装目录内的官方源码。
+- 新增 `scripts/agon/debug/test_gate.lua`，基于官方运行时可见的 `TheNet:IsDedicated()`、`TheNet:GetServerName()`、`TheNet:GetServerDescription()` 和 `TheShard:GetShardId()` 做资格门；当前 Test 集群指纹为 `cluster_name=󰀎荒野求生测试档󰀏`、`cluster_description=测试`、`shard_id=1`。官方 Lua 未暴露 Cluster 路径名接口，因此文档明确记录这是运行时指纹而非路径伪造。
+- `AgonRuntime` 的开关只存在进程内，初始化默认 `false`，不进入 snapshot；`on` 只影响随后创建的 `TEST_MODE` Instance，生产 Mode、合成诊断、恢复队列和重启加载均不继承；`off` 会立即撤销已创建但尚未绑定玩家的 PlayerSandbox live 权限。正常 Participant/PlayerSandbox 权限链仍是必需条件。
+- `modmain.lua` 新增 `/agon.test.player_sandbox status|on|off`，使用官方 `ADMIN` 权限、服务端二次资格校验和诊断结果码；客户端显示入口不等于服务端授权，非符合条件的服务端不能开启。
+- 修改文件：`modmain.lua`、`scripts/agon/core/instance_manager.lua`、`scripts/agon/debug/diagnostics.lua`、`scripts/agon/debug/test_gate.lua`、`scripts/agon/player/sandbox_service.lua`、`scripts/components/agon_runtime.lua`、`docs/base-design.md`、`docs/base-implementation-plan.md`、`docs/wp10-client-acceptance.md`；本日志按规则追加本次执行记录。没有执行 commit、push、分支切换或历史改写。
+
+#### 官方 `klei/Test/World01` 运行证据
+
+- 约 `21:40–21:44` 使用官方 `D:\SteamLibrary\steamapps\common\Don't Starve Together\bin64\dontstarve_dedicated_server_nullrenderer_x64.exe`，参数为 `-persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01`；版本 `747465`、Build `4239`，World01 端口 `12000`、Master shard 端口 `11889`，`modoverrides.lua` 的 `enable_agon=true`。
+- 最新代码启动后，官方控制台确认 `PLAYER_TEST_RESTART_ON_TEST:enabled=false eligible=true code=nil`，同时 Runtime Debug 为 `boot=6 ... instances=0 zones=10 restores=0 backend_pending=0 errors=0 live_player_test=off test_context=eligible`；说明干净启动默认关闭且资格门正确识别 Test/World01。
+- 已验证管理员入口注册为 `registered=true permission=ADMIN params=action server_context_access=true`；开关传播回归输出 `PLAYER_TEST_PROPAGATION_FINAL2:off=false on=true disable=true:PLAYER_TEST_DISABLED existing_after_off=false destroy=true:true final=false/true`，证明开启只放行新 Instance，关闭会撤销既有服务权限并可清理。
+- 再次执行 WP4–WP9 官方服务端合成回归，输出 `WP10_GATE_REGRESSION_FINAL:wp4=true:nil wp5=true:nil wp6=true:nil wp7=true:nil wp8=true:nil wp9=true:nil validate=true:nil gate=false/true`；测试产生的 Instance、恢复记录和 Backend pending 已清理，`WP10_TEST_ARTIFACT_CLEANUP` 最终为 `instances=0 zones=10 restores=0 backend_pending=0 errors=0`。
+- 跨重启验证：先在当前 Runtime 执行 `SetLivePlayerTestEnabled(true)`，得到 `PLAYER_TEST_RESTART_PREPARE_ON:ok=true code=PLAYER_TEST_ENABLED enabled=true eligible=true`，随后正常停服生成 snapshot `#47/#48`；重新启动同一 `Test/World01` 并加载 snapshot `#48` 后，得到 `PLAYER_TEST_CROSS_RESTART:enabled=false eligible=true code=nil`，Runtime Debug 为 `boot=7 ... instances=0 zones=10 restores=0 backend_pending=0 errors=0 live_player_test=off test_context=eligible`。因此 `on` 没有随存档恢复，重启后的默认关闭得到运行时证据而非仅依赖代码推断。
+- 最终 `c_shutdown()` 正常生成 snapshot `#49/#50` 并退出；复核 `dontstarve_dedicated_server_nullrenderer_x64` 进程不存在，`12000/11889` 无监听端口，Test/World01 配置仍为 `enable_agon=true`。
+- 本轮仍只出现已知官方 set-piece angle 错误：`hermitcrab_relocation_manager` 缺少 `monkeyqueen/monkeyportal`，`wagpunk_arena_manager` 缺少 `hermitcrab_marker/beebox_hermit`；没有因此修改官方源码，也未发现本轮新增 Lua 错误。
+
+#### 结果与未覆盖项
+
+- WP10 的服务端安全开关、资格门、管理员入口、开关传播、默认关闭和跨重启不继承已完成并有官方 Test/World01 证据；WP10 仍不能标记为 `Base Ready`，因为真实玩家尚未实际接入。
+- 尚未覆盖：真实双客户端/UI 与 StateGraph 动画、真实玩家逐字段恢复和断线重连、PREPARING/RUNNING/TRANSITION/FINISHING 四阶段人工重启矩阵、故障注入后的 `QUARANTINED` 修复、第二 shard/cross-shard、真实 Backend transport 重复奖励联调，以及最终生产 UI。合成诊断和 Runtime 控制台证据不替代这些人工验收。
+- `git diff --check`、Markdown code fence、配置值和官方源码边界检查随后执行；PATH 中仍没有 `lua`、`luac`、`stylua`，未全局安装解析器。建议 Commit：
+
+  ```text
+  feat(wp10): 增加 Test/World01 真实玩家验收安全开关
+  ```
+
+### 1.37 2026-09-02：真实客户端窗口检查受 Windows 捕获接口限制
+
+- 在完成 Test/World01 服务端验证后检查本机现有 DST 客户端：检测到一个 `dontstarve_steam_x64` 进程和一个标题为 `Don't Starve Together` 的窗口；没有关闭、重启或修改这个用户现有客户端。
+- 尝试读取该窗口状态时，Windows Computer Use 的窗口激活/捕获连续返回 `SetIsBorderRequired failed: 不支持此接口 (0x80004002)`。按 UI 控制规范停止后续点击、键盘输入和登录操作，因此没有执行客户端 UserCommand、没有传输账号/密码，也没有把客户端窗口发现记作真实玩家验收通过。
+- 结论：WP10 服务端安全门和跨重启证据仍以 1.36 为准；真实双客户端/UI、管理员菜单显示、真实玩家绑定和逐字段恢复仍为 `WAITING_MAINTAINER`，需要在可用的客户端窗口捕获环境中由维护者继续按 `docs/wp10-client-acceptance.md` 执行。

@@ -882,6 +882,18 @@ PlayerProfile 可以声明基础三维、移动速度、初始装备、技能树
 
 尚未适配且无法保证恢复的角色，可以停留在大厅，但必须拒绝其进入匹配。
 
+#### WP10 真实玩家验收开关
+
+PlayerSandbox 的真实玩家 live mutation 默认必须关闭。WP10 允许通过一个只用于
+验收的临时开关验证真实客户端，但这个开关不是正式玩法能力，也不新增
+`modinfo.lua` 配置项；公开配置仍只有 `enable_agon`。
+
+- 只有官方 `ADMIN` UserCommand `/agon.test.player_sandbox on|off|status` 能请求切换；服务端 Runtime 仍会再次校验，不能依赖客户端菜单权限。
+- `on` 只接受当前专服、权威模拟、当前 Test Cluster 的固定 `cluster_name`/`cluster_description` 指纹及 `TheShard:GetShardId() == 1`（对应本仓库的 `Test/World01`）。DST 官方 Lua 没有暴露 Cluster 路径，因此名称和描述变更时必须同步更新测试资格指纹；不匹配时返回 `PLAYER_SANDBOX_TEST_CONTEXT_REQUIRED`。
+- 开关只存在于当前进程内，默认关闭，不写入 Runtime/Instance/PlayerSandbox snapshot；重启后必须再次由管理员开启。
+- 开启只给之后新建的 `TEST_MODE` Instance 注入显式 `allow_live_player_test`；其他 Mode、合成玩家规则和重启恢复路径不继承该权限。关闭时立即撤销现有 Instance 的 live 测试权限。
+- 真实玩家仍必须通过正常 Participant、PlayerSandbox Capture/Validate/Restore pipeline；该开关只解除环境测试门，不跳过状态校验、恢复或清理。
+
 ---
 
 ## 7. 玩家死亡底层接口

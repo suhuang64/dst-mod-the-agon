@@ -497,6 +497,8 @@ function InstanceManager.Create(self, mode_id, userids, options)
         {
             now_fn = self.now_fn,
             profile_registry = self.profile_registry,
+            allow_live_player_test = mode_id == "TEST_MODE"
+                and options.allow_live_player_test == true,
         }
     )
     if not services_initialized then

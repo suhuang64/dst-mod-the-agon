@@ -45,7 +45,43 @@ c_announce((function() local runtime = TheWorld.components.agon_runtime runtime:
 
 这些命令只证明服务端合成路径，不替代下面的真实客户端项目。
 
-## 3. 记录真实客户端身份
+## 3. 真实玩家验收开关
+
+真实玩家接入前，必须由管理员在客户端执行：
+
+```text
+/agon.test.player_sandbox status
+/agon.test.player_sandbox on
+```
+
+该命令使用官方 `ADMIN` 权限。服务端还会校验：专服、权威模拟、当前 Test
+Cluster 的名称/描述指纹和 `TheShard:GetShardId() == 1`；任一条件不满足都会返回
+`PLAYER_SANDBOX_TEST_CONTEXT_REQUIRED`。DST 官方 Lua 没有暴露 Cluster 路径，所以
+当前 `Test/cluster.ini` 的 `cluster_name = 󰀎荒野求生测试档󰀏`、`cluster_description = 测试`
+是资格指纹的一部分，修改它以后开关会拒绝，不能通过改名绕过。
+
+`on` 只影响之后新建的 `TEST_MODE` Instance；请在第 5 节创建 Instance 之前执行。
+测试结束并确认玩家已恢复、Instance 已销毁后执行：
+
+```text
+/agon.test.player_sandbox off
+/agon.test.player_sandbox status
+```
+
+`off` 会撤销现有 Instance 的 live 测试权限，服务器重启也会自动回到
+`enabled=false`。RemoteCommandInput 不是 UserCommand 解析器；如果只操作服务端
+控制台，使用下面的已验证 Runtime 表达式，不要直接输入 `/agon.test.player_sandbox on`：
+
+```text
+c_announce((function() local runtime = TheWorld.components.agon_runtime local ok, code = runtime:SetLivePlayerTestEnabled(true) return "WP10_PLAYER_TEST_ON:" .. tostring(ok) .. ":" .. tostring(code) end)())
+c_announce((function() local runtime = TheWorld.components.agon_runtime local status = runtime:GetLivePlayerTestStatus() return "WP10_PLAYER_TEST_STATUS:enabled=" .. tostring(status.enabled) .. " eligible=" .. tostring(status.eligible) .. " code=" .. tostring(status.code) end)())
+c_announce((function() local runtime = TheWorld.components.agon_runtime local ok, code = runtime:SetLivePlayerTestEnabled(false) return "WP10_PLAYER_TEST_OFF:" .. tostring(ok) .. ":" .. tostring(code) end)())
+```
+
+以上服务端表达式只能证明当前专服 Runtime 的开关状态；管理员命令的真实客户端
+菜单显示、真实玩家绑定和逐字段恢复仍必须按后续项目人工执行。
+
+## 4. 记录真实客户端身份
 
 维护者启动两个真实客户端，分别称为客户端 A、客户端 B，让两者加入同一个 `Test/World01`。在两者都进入后，在服务端控制台执行：
 
@@ -61,7 +97,7 @@ end)())
 
 把输出中的两个真实 `userid` 记为 `A_USERID`、`B_USERID`。不要把合成玩家的 userid 或客户端显示名当作证据。客户端 A/B 需要各自记录：加入时间、角色 prefab、是否位于 Lobby、Portal 相对位置、是否看到对方，以及客户端自己的异常/控制台信息。
 
-## 4. 真实 Instance 绑定脚本
+## 5. 真实 Instance 绑定脚本
 
 当前仓库没有正式 TestMode UI，也没有把 `agon.test.create` 做成带玩家参数的产品入口。下面的控制台片段只用于 WP10 的受控服务端绑定证据，不代表正式客户端 UI；把 `A_USERID`、`B_USERID` 替换为第 3 节记录的值后再执行：
 
@@ -95,7 +131,7 @@ c_announce((function()
 end)())
 ```
 
-在当前安全策略下，真实玩家若尚未获得明确授权的测试开关，预期会看到 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED`。这不是通过，而是 WP10 的明确阻塞证据；不能把合成玩家通过、或直接设置内部字段，写成真实玩家通过。若两名玩家都能成功绑定，执行：
+未执行第 3 节 `on` 或资格门不满足时，真实玩家预期会看到 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED`；这不是通过。执行开关后若两名玩家都能成功绑定，才执行：
 
 ```text
 c_announce((function() local runtime = TheWorld.components.agon_runtime local ok, code = runtime:StartInstance("INSTANCE_ID", "wp10_start") return "WP10_START:" .. tostring(ok) .. ":" .. tostring(code) end)())
@@ -106,7 +142,7 @@ c_announce((function() local runtime = TheWorld.components.agon_runtime runtime:
 
 记录 `instance_id`、`zone_id`、`generation`、`scene_revision`、`seed`、两个 participant 状态及服务端日志范围。
 
-## 5. 双 Instance 与 Scene 用例
+## 6. 双 Instance 与 Scene 用例
 
 为验证 A 销毁不影响 B，分别为客户端 A、B 创建两个 Instance，记录为 `INSTANCE_A`、`INSTANCE_B`，再分别启动。RemoteCommandInput 中用下面的表达式代替直接输入 `agon.test.start`、`agon.test.scene` 和 `agon.destroy_instance`；每个用例都要记录动作前后两局的 Instance/Zone/scene revision。
 
@@ -133,7 +169,7 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 
 客户端必须额外确认：A/B 是否仍能看见正确的玩家和实体、相机是否越过 `camera_bounds`、Scene 变化后是否出现重复实体、残留地皮或 minimap layer。普通构建不得越过 `build_bounds`，任何修改不得越过 `hard_bounds`。
 
-## 6. 玩家、观战与死亡用例
+## 7. 玩家、观战与死亡用例
 
 以下项目只有在真实玩家绑定成功后才可执行。没有正式 UI 时，维护者可以使用已经存在的官方游戏操作，但不得用合成玩家替代客户端画面、StateGraph 或网络可见性证据。
 
@@ -143,7 +179,7 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 4. 触发 REVIVABLE_CORPSE 策略，确认尸体不可移动，且只有同一 Instance 的合法活跃 Participant 可以救援；Ghost、Corpse 和 Spectator 不能互相冒充。
 5. 观察 `agon_player_classified` 的 `instance_id`、`generation`、`audience`、`spectator` 和死亡状态在客户端 A/B 上是否一致；记录客户端 UI/StateGraph/相机异常。
 
-## 7. 失败注入与重启矩阵
+## 8. 失败注入与重启矩阵
 
 每一项失败都必须记录错误码、局部隔离结果、重试/管理终态和清理后的 Zone 状态。当前没有公开的正式故障注入 UI；如果需要临时控制台片段，必须把片段和结果一并放入日志，不得只记“已测”。
 
@@ -156,7 +192,7 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 
 每个阶段都执行：保存或停服、记录重启前日志位置、用同一 `Test/World01` 重启、执行 `agon.recovery`/`agon.instances`/`agon.zones`，重新加入客户端并验证恢复或安全拒绝。任何真正的玩家状态恢复都要保留客户端 A/B 的逐字段结果。
 
-## 8. enable_agon=false 硬门
+## 9. enable_agon=false 硬门
 
 1. 停止 World01，保存本轮 true 状态的日志行号。
 2. 只把 `World01/modoverrides.lua` 的 `enable_agon=true` 临时改为 `enable_agon=false`，保持 Mod 本身 `enabled=true`。
@@ -164,7 +200,7 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 4. 检查从本次启动位置开始没有 `LAYOUT_READY`、`CORE_READY`、Agon manager/listener/task/Zone scan 或 BackendAdapter 请求；其他 shard/worldgen 行为不能被改变。
 5. 停服后恢复 `enable_agon=true`，再次启动并完成第 2 节预检，确认硬门恢复后没有残留 false 状态。
 
-## 9. 结果表与判定
+## 10. 结果表与判定
 
 每行使用 `PASS`、`FAIL` 或 `WAITING_MAINTAINER`，不得用“理论通过”。
 
@@ -173,6 +209,7 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 | 服务端预检 WP4–WP9 |  |  |  |  |  |
 | Lobby/Portal/10 Zone/天数 |  |  |  |  |  |
 | false 硬门 |  |  |  |  |  |
+| Test/World01 真实玩家开关 |  |  |  |  |  |
 | 双 Instance 隔离 |  |  |  |  |  |
 | BLOCKING/LIVE_PATCH |  |  |  |  |  |
 | EntityProfile/Replica/UI |  |  |  |  |  |
@@ -184,9 +221,9 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 
 WP10 只有在所有必需行都有真实运行证据、没有已知数据丢失路径，并且同一单 shard 范围内的安全行为全部通过时，才能判定 `Base Ready`。第二 shard、普通世界到 Agon shard 的迁移、真实 Backend transport 和生产 UI 仍需另行集成验收。
 
-## 10. 当前明确阻塞
+## 11. 当前明确阻塞
 
 - 当前 TestMode 没有正式玩家 UI/匹配入口；`agon.test.create` 是无玩家的管理员诊断入口。
-- `PlayerSandbox` 对真实玩家默认返回 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED`。在未明确批准、且严格限制到 Test/World01 的测试开关之前，不得修改这个默认安全边界。
+- `PlayerSandbox` 对真实玩家默认返回 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED`；已实现的测试开关只允许管理员在固定 Test/World01 指纹下、按当前进程临时开启，不改变正式默认安全边界。
 - 当前环境只有 World01，不能声称第二 shard/cross-shard 已通过。
 - 没有真实客户端结果以前，WP10 状态固定为 `WAITING_MAINTAINER`。

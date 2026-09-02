@@ -670,6 +670,14 @@ function SandboxService.GetDebugString(self)
     )
 end
 
+function SandboxService.SetLivePlayerTestEnabled(self, enabled)
+    if type(enabled) ~= "boolean" then
+        return false, SandboxService.ERROR_CODES.INVALID_SNAPSHOT
+    end
+    self.allow_live_mutation = enabled
+    return true
+end
+
 local function AttachMethods(service)
     service.GetTransaction = SandboxService.GetTransaction
     service.GetTransactionObject = SandboxService.GetTransactionObject
@@ -687,6 +695,7 @@ local function AttachMethods(service)
     service.Validate = SandboxService.Validate
     service.Close = SandboxService.Close
     service.GetDebugString = SandboxService.GetDebugString
+    service.SetLivePlayerTestEnabled = SandboxService.SetLivePlayerTestEnabled
     return service
 end
 
@@ -713,7 +722,9 @@ function SandboxService.New(instance, services, options)
         instance_id = instance.instance_id,
         services = services or {},
         now_fn = options.now_fn,
-        allow_live_mutation = options.allow_live_mutation == true,
+        -- 真实玩家只允许由 Test/World01 的内存态验收开关放行；合成玩家
+        -- 仍由 IsLiveMutationAllowed 单独允许，不能通过任意 service option 绕过。
+        allow_live_mutation = options.allow_live_player_test == true,
         adapter_registry = adapter_registry,
         transactions_by_id = {},
         transactions_by_userid = {},
