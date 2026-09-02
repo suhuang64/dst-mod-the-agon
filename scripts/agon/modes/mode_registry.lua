@@ -22,6 +22,7 @@ ModeRegistry.ERROR_CODES =
     UNKNOWN_SERVICE = "UNKNOWN_SERVICE",
     DUPLICATE_SERVICE = "DUPLICATE_SERVICE",
     INVALID_MODE_FACTORY = "INVALID_MODE_FACTORY",
+    INVALID_PROFILE_DECLARATION = "INVALID_PROFILE_DECLARATION",
 }
 
 local function IsInteger(value)
@@ -39,10 +40,15 @@ local function CopyDefinition(definition)
         mode_version = definition.mode_version,
         zone_category = definition.zone_category,
         services = {},
+        profiles = {},
+        RegisterProfiles = definition.RegisterProfiles,
         CreateRuntime = definition.CreateRuntime,
     }
     for index = 1, #definition.services do
         table.insert(copied.services, definition.services[index])
+    end
+    for index = 1, #(definition.profiles or {}) do
+        table.insert(copied.profiles, definition.profiles[index])
     end
     return copied
 end
@@ -61,6 +67,25 @@ function ModeRegistry.ValidateDefinition(definition)
     end
     if type(definition.CreateRuntime) ~= "function" then
         return false, ModeRegistry.ERROR_CODES.INVALID_MODE_FACTORY
+    end
+
+    if definition.RegisterProfiles ~= nil
+        and type(definition.RegisterProfiles) ~= "function" then
+        return false, ModeRegistry.ERROR_CODES.INVALID_PROFILE_DECLARATION
+    end
+    if definition.profiles ~= nil and type(definition.profiles) ~= "table" then
+        return false, ModeRegistry.ERROR_CODES.INVALID_PROFILE_DECLARATION
+    end
+    local profile_ids = {}
+    for index = 1, #(definition.profiles or {}) do
+        local profile_id = definition.profiles[index]
+        if not IsNonEmptyString(profile_id) or profile_ids[profile_id] then
+            return false, ModeRegistry.ERROR_CODES.INVALID_PROFILE_DECLARATION
+        end
+        profile_ids[profile_id] = true
+    end
+    if #(definition.profiles or {}) > 0 and type(definition.RegisterProfiles) ~= "function" then
+        return false, ModeRegistry.ERROR_CODES.INVALID_PROFILE_DECLARATION
     end
 
     local services = definition.services
@@ -109,6 +134,8 @@ function ModeRegistry.Register(self, definition)
         mode_version = definition.mode_version,
         zone_category = definition.zone_category,
         services = definition.services or {},
+        profiles = definition.profiles or {},
+        RegisterProfiles = definition.RegisterProfiles,
         CreateRuntime = definition.CreateRuntime,
     })
     self.definitions_by_id[copied.mode_id] = copied
@@ -137,9 +164,13 @@ function ModeRegistry.List(self)
             mode_version = definition.mode_version,
             zone_category = definition.zone_category,
             services = {},
+            profiles = {},
         }
         for service_index = 1, #definition.services do
             table.insert(summary.services, definition.services[service_index])
+        end
+        for profile_index = 1, #(definition.profiles or {}) do
+            table.insert(summary.profiles, definition.profiles[profile_index])
         end
         table.insert(definitions, summary)
     end

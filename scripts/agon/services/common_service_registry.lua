@@ -5,6 +5,7 @@ local ClockService = require("agon/services/clock_service")
 local DecisionService = require("agon/services/decision_service")
 local EffectService = require("agon/services/effect_service")
 local ScoreLedger = require("agon/services/score_ledger")
+local EntityProfileService = require("agon/services/entity_profile_service")
 
 local CommonServiceRegistry = {}
 
@@ -76,6 +77,15 @@ local SERVICE_DEFINITIONS =
         dependencies = {},
         Create = function(instance, services, options)
             return ScoreLedger.New(instance, services, options)
+        end,
+    },
+    entity_profiles =
+    {
+        service_id = "entity_profiles",
+        version = 1,
+        dependencies = {},
+        Create = function(instance, services, options)
+            return EntityProfileService.New(instance, services, options)
         end,
     },
 }

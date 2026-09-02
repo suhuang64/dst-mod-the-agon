@@ -68,6 +68,16 @@ local function IsScopeOpen(scope)
     return scope ~= nil and type(scope.IsOpen) == "function" and scope:IsOpen()
 end
 
+local function GetProfileService(instance)
+    if instance == nil then
+        return nil
+    end
+    if type(instance.GetService) == "function" then
+        return instance:GetService("entity_profiles")
+    end
+    return instance.profile_service
+end
+
 local function GetParentEntity(entity)
     if entity == nil then
         return nil
@@ -239,6 +249,26 @@ function SpawnService.Spawn(self, instance, spec, scope)
         table.insert(registered_records, record)
     end
 
+    if spec.profile_id ~= nil or spec.child_profile_policy ~= nil then
+        local profile_service = GetProfileService(instance)
+        if profile_service == nil
+            or type(profile_service.ApplySpawn) ~= "function" then
+            self.entity_registry:RemoveGuids(registered)
+            RemoveUnregistered(context.entities)
+            return nil, Diagnostics.ERROR_CODES.SPAWN_FAILED
+        end
+        local profiles_applied, profile_code = profile_service:ApplySpawn(
+            instance,
+            registered_records,
+            spec
+        )
+        if not profiles_applied then
+            self.entity_registry:RemoveGuids(registered)
+            RemoveUnregistered(context.entities)
+            return nil, profile_code or Diagnostics.ERROR_CODES.SPAWN_FAILED
+        end
+    end
+
     return root, nil, registered_records
 end
 
@@ -256,7 +286,32 @@ function SpawnService.Claim(self, instance, entity, data, scope)
     data = type(data) == "table" and data or {}
     data.scope = scope
     data.generation = data.generation or scope:GetGeneration()
-    return self.entity_registry:Claim(entity, data)
+    data.external_claim = true
+    local record, claim_code = self.entity_registry:Claim(entity, data)
+    if record == nil then
+        return nil, claim_code
+    end
+    if data.profile_id ~= nil then
+        local profile_service = GetProfileService(instance)
+        if profile_service == nil or type(profile_service.Apply) ~= "function" then
+            self.entity_registry:Remove(record.guid)
+            return nil, Diagnostics.ERROR_CODES.SPAWN_FAILED
+        end
+        local applied, profile_code = profile_service:Apply(
+            record,
+            data.profile_id,
+            data.profile_version,
+            {
+                operation = "claim",
+                execution_mode = data.execution_mode or "BLOCKING",
+            }
+        )
+        if applied == nil then
+            self.entity_registry:Remove(record.guid)
+            return nil, profile_code or Diagnostics.ERROR_CODES.SPAWN_FAILED
+        end
+    end
+    return record
 end
 
 function SpawnService.Inherit(self, instance, child, parent, data)
@@ -269,7 +324,35 @@ function SpawnService.Inherit(self, instance, child, parent, data)
     if type(self.entity_registry.Inherit) ~= "function" then
         return nil, Diagnostics.ERROR_CODES.ENTITY_OWNER_MISMATCH
     end
-    return self.entity_registry:Inherit(child, parent, data)
+    data = type(data) == "table" and data or {}
+    local record, inherit_code = self.entity_registry:Inherit(child, parent, data)
+    if record == nil then
+        return nil, inherit_code
+    end
+    if record.profile_id ~= nil then
+        local profile_service = GetProfileService(instance)
+        if profile_service == nil
+            or type(profile_service.ApplyInherited) ~= "function" then
+            self.entity_registry:Remove(record.guid)
+            return nil, Diagnostics.ERROR_CODES.SPAWN_FAILED
+        end
+        local parent_record = self.entity_registry:GetByEntity(parent)
+        local applied, profile_code = profile_service:ApplyInherited(
+            record,
+            parent_record,
+            {
+                profile_id = data.profile_id,
+                profile_version = data.profile_version,
+                execution_mode = data.execution_mode,
+                operation = data.operation,
+            }
+        )
+        if applied == nil then
+            self.entity_registry:Remove(record.guid)
+            return nil, profile_code or Diagnostics.ERROR_CODES.SPAWN_FAILED
+        end
+    end
+    return record
 end
 
 function SpawnService.Close(self)

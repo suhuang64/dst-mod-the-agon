@@ -106,6 +106,7 @@ function InstanceManager.New(options)
         now_fn = options.now_fn,
         common_service_registry = options.common_service_registry
             or CommonServiceRegistry.New(),
+        profile_registry = options.profile_registry,
         instances_by_id = {},
         instance_order = {},
         destroyed_ids = {},
@@ -372,7 +373,10 @@ function InstanceManager.Create(self, mode_id, userids)
     local services_initialized, services_code = instance:InitializeServices(
         self.common_service_registry,
         definition.services,
-        { now_fn = self.now_fn }
+        {
+            now_fn = self.now_fn,
+            profile_registry = self.profile_registry,
+        }
     )
     if not services_initialized then
         if instance.root_scope ~= nil and not instance.root_scope:IsClosed() then

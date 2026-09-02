@@ -143,11 +143,13 @@ function Wp5Diagnostics.Run(runtime)
 
         local services_a, service_count_a = CountServices(instance_a)
         local services_b, service_count_b = CountServices(instance_b)
-        Check(service_count_a == 5 and service_count_b == 5
+        Check(service_count_a == 6 and service_count_b == 6
             and services_a.phase and services_a.clock
             and services_a.decision and services_a.effects and services_a.score
+            and services_a.entity_profiles
             and services_b.phase and services_b.clock
-            and services_b.decision and services_b.effects and services_b.score,
+            and services_b.decision and services_b.effects and services_b.score
+            and services_b.entity_profiles,
             "declared Common Services were not isolated per Instance")
 
         local started_a, start_a_code = runtime:StartInstance(

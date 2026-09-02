@@ -971,6 +971,14 @@ scripts/agon/net/audience_state_channel.lua
 feat(profile): 增加实例级实体与物品定制框架
 ```
 
+### WP6 当前状态（2026-09-02）
+
+- 状态：Base 服务端实现和官方 Test/World01 运行验收已完成。EntityProfileRegistry、按 Instance 隔离的 EntityProfileService、Profile adapter、EntityRegistry membership、child Scope 清理和 TestMode profiles 已接入。
+- 官方专服 `WP6_TEST_PASS` 已通过：两个 Instance 的同名 spider/torch 使用不同 Profile；`SPAWN_ONLY` 运行中重配和 `BLOCKING_ONLY` 非安全阶段生成均被拒绝；跨 Instance ownership 被拒绝；原始 child entity 的继承、`REPLICATED` display contract、Audience 可见性和 Scope 关闭清理均通过。
+- 回归：`WP5_TEST_PASS` 通过；收口为 `instances=0`、`free_zones=10/10`、`profiles=6`、`ValidateCore=true`。
+- 诊断中发现并修正真实 Prefab 的同步 child 会增加 EntityRegistry 记录、物品 Profile 记录数不一定为 1，以及测试未推进 `RUNNING` 就断言 `BLOCKING_ONLY` 的问题；未修改官方 Prefab、全局 `TUNING` 或官方 manager。
+- 边界：本 WP 已验证服务端 Profile 与 Audience contract，但尚未覆盖真实双客户端的 Replica/UI/动作显示、第二 shard、异步技能 child 的实际生成链路和 WP9 的跨重启活动 Scene 全量恢复清理；这些仍按 WP7–WP10/WP9 计划执行。WP1 两条 set-piece angle 错误继续按既有决定延后。
+
 ---
 
 ## WP7：PlayerSandbox 与 PlayerProfile

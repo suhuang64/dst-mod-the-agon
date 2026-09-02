@@ -615,3 +615,115 @@ docs(base): 修正执行日志文件名
   ```
 
 - 进入条件：WP5 验收项和官方 Test/World01 的服务隔离、诊断、清洁重启复核已完成；可以进入 WP6/WP7 的后续开发，但 WP9 必须接收并重新验收本日志记录的活动 Scene 持久化清理边界，WP10 仍需真实客户端和完整跨系统验收。
+
+### 1.20 2026-09-02：未覆盖验收的执行时序决定
+
+- 针对 WP5 完成报告中“真实双客户端/UI、跨 shard、完整 WP9 恢复清理”尚未覆盖的项目，依据当前依赖关系确认：本轮不重复做完整验收，后续在对应能力实现完成后集中测试。
+- 真实双客户端/UI：等待 WP7–WP8 的 PlayerSandbox、玩家进入/死亡/观战、classified/Replica 和 UI 链路完成，再按 WP10 的编号客户端脚本由维护者操作至少两个真实客户端；当前 WP5 只有服务端 TestMode 诊断，不能用假玩家替代客户端验收。
+- 跨 shard：等待可用的第二 shard 测试环境；当前 Test Cluster 只有 World01，只能验证本地 Agon shard 和 `enable_agon` 硬门，不能声称完成普通 shard ↔ Agon shard 迁移、断线和迁移失败恢复。
+- 完整 WP9 恢复清理：等待 WP6 与 WP8 完成后，在 WP9 实现 entity、Scope、SceneTransaction、Zone Tile、玩家恢复队列和幂等 restore/destroy，再按 PREPARING、RUNNING、TRANSITION、FINISHING 分阶段重启复测。WP5 已提前完成 active Instance 的 `ABORT_ON_RESTART` 探针，并保留了 `SCENE_RESET_FAILED` 证据作为 WP9 的明确待办。
+- 本次只是计划决策和文档记录，没有新增代码、没有启动服务器、没有修改存档，也没有 commit/push。
+
+### 1.21 2026-09-02：WP6 EntityProfileService 实现与官方 Test/World01 验收
+
+#### 任务范围与执行规则
+
+- 按当前 `docs/base-design.md`、`docs/base-implementation-plan.md` 进入 WP6；本条记录遵守项目约定，完整保存实现、调试、运行验证、清理和未覆盖边界，后续 Agent 必须先读本日志再继续。
+- 本轮只处理实例级 EntityProfile，不处理用户已决定延后的两条官方 set-piece angle 错误，不改官方源码，不安装全局工具，不执行 commit/push。
+
+#### 实现内容
+
+- 新增 `scripts/agon/services/entity_profile_registry.lua`：定义并校验 profile ID/version、Prefab constraint、`SPAWN_ONLY`/`BLOCKING_ONLY`/`LIVE_SAFE`、`SERVER_ONLY`/`REPLICATED`、客户端 contract、adapter 和 child policy；拒绝未知、重复、版本不匹配和缺少 REPLICATED contract 的 Profile。
+- 新增 `scripts/agon/services/entity_profile_service.lua`：每个 Instance 独立创建 service，限制 entity 必须属于当前 Instance，拒绝 GLOBAL/Lobby/其他 Instance；支持 spawn/inherited/live apply、remove/restore、display state、client contract、adapter cleanup 和 Scope resource cleanup。
+- 新增 `scripts/agon/modes/test_mode/profiles.lua`：注册 6 个 TestMode Profile：flower 普通 Profile、flower REPLICATED display Profile、spider 属性强化 Profile、spider BLOCKING_ONLY brain/defensive Profile、torch 强化 Profile、torch 弱化/燃料速率 Profile。
+- `EntityRegistry` 增加 profile membership、external claim、global entity 标记、`UpdateProfile` 和注销前 Profile cleanup；`SpawnService`、`SceneService`、`InstanceManager`、`CommonServiceRegistry`、`ModeRegistry`、`AgonRuntime` 接入 Profile registry/service；TestMode 增加 WP6 诊断入口和 admin command `agon.test.wp6`。
+- 未使用全局 `TUNING`、全局 Prefab 改写或无条件 PostInit Hook；Profile 只在已登记的 Instance entity 上产生效果。
+
+#### 官方源码核对
+
+- 核对了官方 `scripts/prefabs/spider.lua`、`scripts/brains/spiderbrain.lua`、`scripts/components/health.lua`、`scripts/components/combat.lua` 的组件、`SetBrain`/`StopBrain`/`RestartBrain` 和 `defensive` 路径。
+- 核对了官方 `scripts/prefabs/torch.lua`、`scripts/components/weapon.lua`、`scripts/components/fueled.lua` 的 weapon damage、fuel rate 和实体组件接口。
+- 实测发现原版 `spider` 构造会产生不止一个 EntityRegistry record；因此 Profile service 不能按“一个 Spawn 只返回一个 record”实现，也不能把父 Profile 盲目应用到 Prefab/约束不匹配的同步 child。
+
+#### 官方服务器环境
+
+- Mod 挂载：`D:/SteamLibrary/steamapps/common/Don't Starve Together/mods/the-agon` 指向 `D:/OneDrive/DST/the-agon`。
+- 服务器：`D:/SteamLibrary/steamapps/common/Don't Starve Together/bin64/dontstarve_dedicated_server_nullrenderer_x64.exe`。
+- 工作目录必须是官方 `bin64`；启动参数：
+
+  ```text
+  -persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01
+  ```
+
+- 本轮启动时 `[LAYOUT_READY]`、`[CORE_READY]` 正常；World01 为 400×400、10 个 Zone，服务端端口 `12000`、shard 端口 `11889`。
+
+#### 调试过程与修复
+
+- 第一次 WP6 运行失败：`same named monster Profiles were not applied independently`。直接探针显示真实 spider 返回多个记录，父 Profile 被错误应用到不匹配的同步 child；修正 child profile resolution，只有明确 child policy 或 Prefab constraint 匹配时才继承，其他 child 保留 Instance ownership 但不套用父 Profile。
+- 第二次运行失败：`same named item Profiles did not provide different behavior`。直接探针已确认物品 Profile 正常：`TEST_TORCH_POWER` 的 damage 为 `34`、fuel rate 为 `0.5`，`TEST_TORCH_LIGHT` 的 damage 为 `8.5`、fuel rate 为 `2`；失败原因只是诊断错误假设 torch 记录数必须等于 1。改为验证至少一个有效 record。
+- 第三次运行暴露诊断时序问题：在 Instance 仍为 `PREPARING` 时就断言延迟 `BLOCKING_ONLY` 必须拒绝，因此该断言不成立。增加两个 Instance 的正式 `StartInstance`，确认进入 `RUNNING` 后再验证延迟 BLOCKING spawn；同时修正成功 Start 返回码应为 `nil` 的诊断断言。
+
+#### 最终运行结果
+
+- 官方控制台命令：
+
+  ```text
+  TheWorld.components.agon_runtime:RunWP6Diagnostics()
+  TheWorld.components.agon_runtime:RunWP5Diagnostics()
+  ```
+
+- WP6 最终输出：
+
+  ```text
+  [TheAgon] [WP6_TEST_PASS] shard_id=1 operation=wp6_diagnostics core_status=READY WP6 entity profile diagnostics passed
+  ```
+
+- WP6 覆盖：A/B 两个 Instance 的同名 spider 差异化属性、同名 torch 差异化 damage/fuel 行为、`SPAWN_ONLY` 运行中重配拒绝、`BLOCKING_ONLY` 在 RUNNING 阶段拒绝、跨 Instance ownership 拒绝、原始 child entity 的 Profile/Scope 继承、REPLICATED display state/client contract、INSTANCE Audience 可见性以及 child Scope 关闭后的 Profile/entity 清理。
+- WP5 回归输出：
+
+  ```text
+  [TheAgon] [WP5_TEST_PASS] shard_id=1 operation=wp5_diagnostics core_status=READY WP5 common services diagnostics passed
+  ```
+
+- 最终收口探针：
+
+  ```text
+  WP6_CLEANUP instances=0 free_zones=10 total_zones=10 profiles=6 valid=true code=nil
+  ```
+
+- 使用 `c_shutdown()` 正常关闭，完成两次 world serialization；随后确认 dedicated server 进程不存在，端口 `12000`/`11889` 无监听。
+- 服务器日志仍出现两条已知官方 set-piece angle 错误：`hermitcrab_relocation_manager` 缺少 `monkeyqueen`/`monkeyportal`，`wagpunk_arena_manager` 缺少 `hermitcrab_marker`/`beebox_hermit`；按用户决定和 plan 保持延后，未伪造实体或修改官方 manager。
+
+#### 验证与边界
+
+- 官方专服成功加载全部新增 Lua 模块并完成 WP6/WP5 运行诊断；`ValidateCore=true`。`git diff --check` 后续需再次执行，PATH 没有 `lua`/`luac` 时不额外全局安装 parser。
+- 已验证的是服务端 Profile/adapter/ownership/Scope/Audience contract；未冒充完成真实双客户端 Replica/UI/动作视觉、第二 shard、跨 shard 迁移、异步技能 child 实际生成和 WP9 的活动 Scene entity/Scope/SceneTransaction/Zone Tile 跨重启全量恢复清理。
+- WP6 当前代码未提交；建议中文 Conventional Commit：
+
+  ```text
+  feat(profile): 增加实例级实体与物品定制框架
+  ```
+
+- 下一步：按依赖进入 WP7 PlayerSandbox；真实双客户端/UI 和跨 shard 继续在 WP7–WP10 的对应验收阶段执行，WP9 必须重新处理并验证 WP5 已记录的活动 Scene 清理边界。
+
+### 1.22 2026-09-02：WP6 最终边界修正后的复测收口
+
+- 在 1.21 记录之后又完成两项小范围安全修正：child policy 的显式 `false` 改为按 key 存在性读取；`GetProfile` 与 `GetDisplayState` 统一经过当前 Instance 的 EntityRegistry ownership/scope 校验。
+- 为防止修正后只做静态判断，重新从官方 `bin64` 启动 `Test/World01`，执行：
+
+  ```text
+  TheWorld.components.agon_runtime:RunWP6Diagnostics()
+  TheWorld.components.agon_runtime:RunWP5Diagnostics()
+  ```
+
+- 最终运行结果再次为：
+
+  ```text
+  [TheAgon] [WP6_TEST_PASS] shard_id=1 operation=wp6_diagnostics core_status=READY WP6 entity profile diagnostics passed
+  [TheAgon] [WP5_TEST_PASS] shard_id=1 operation=wp5_diagnostics core_status=READY WP5 common services diagnostics passed
+  WP6_CLEANUP_FINAL instances=0 free_zones=10 total_zones=10 profiles=6 valid=true code=nil
+  ```
+
+- 随后执行 `c_shutdown()`，World01 完成两次序列化并正常退出；复核 `PROCESS_REMAINS=False`、`PORTS_REMAINS=False`。最终日志未新增 `LUA ERROR`、`stack traceback`、`bad argument` 或 `attempt to`。
+- `git diff --check` 通过；仅有 Git 关于工作树 LF/CRLF 转换的提示。PATH 中 `lua`/`luac` 均缺失，未全局安装 parser；Lua 模块加载和 API 兼容性由官方专服承担运行验证。
+- 1.21 和本条记录均为 append-only；前述 WP6 实测失败及其原因没有覆盖或删除，后续 Agent 应优先参考这些已记录的真实错误。

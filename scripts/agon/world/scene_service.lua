@@ -759,6 +759,7 @@ function SceneService.ApplyPlan(self, instance, raw_plan)
             return false, position_code
         end
         spawn_spec.position = position
+        spawn_spec.execution_mode = effective_plan.execution_mode
         spawn_spec.spawn_source = spawn_spec.spawn_source
             or (transaction.transaction_id .. ":spawn:" .. tostring(index))
         local entity, spawn_code, records = context.spawn_service:Spawn(

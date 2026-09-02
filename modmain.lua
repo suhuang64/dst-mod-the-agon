@@ -222,6 +222,15 @@ if GetModConfigData("enable_agon") == true then
     )
 
     RegisterAgonAdminCommand(
+        "agon.test.wp6",
+        {},
+        "运行 The Agon WP6 的实体与物品 Profile、应用模式、继承和清理诊断。",
+        function(runtime)
+            runtime:RunWP6Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
         "agon.destroy_instance",
         { "instance_id" },
         "按正式销毁 pipeline 销毁一个 The Agon Instance。",

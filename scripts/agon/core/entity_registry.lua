@@ -95,6 +95,8 @@ local function SetManagedFields(entity, record)
     entity._agon_instance_id = record.instance_id
     entity._agon_scope_id = record.scope_id
     entity._agon_generation = record.generation
+    entity._agon_profile_id = record.profile_id
+    entity._agon_profile_version = record.profile_version
     entity._agon_parent_entity_id = record.parent_entity_id
     entity._agon_root_owner = record.root_owner_entity
     if type(entity.AddTag) == "function" then
@@ -114,6 +116,8 @@ local function ClearManagedFields(entity, instance_id)
         entity._agon_instance_id = nil
         entity._agon_scope_id = nil
         entity._agon_generation = nil
+        entity._agon_profile_id = nil
+        entity._agon_profile_version = nil
         entity._agon_parent_entity_id = nil
         entity._agon_root_owner = nil
         if type(entity.RemoveTag) == "function" then
@@ -266,6 +270,8 @@ function EntityRegistry.Register(self, entity, data)
         spawn_source = data.spawn_source,
         persistent_key = data.persistent_key,
         metadata = CopyValue(data.metadata),
+        external_claim = data.external_claim == true,
+        global_entity = data.global_entity == true,
         onremove_fn = nil,
         scope_resource_id = nil,
         removing = false,
@@ -321,6 +327,8 @@ function EntityRegistry.Register(self, entity, data)
 end
 
 function EntityRegistry.Claim(self, entity, data)
+    data = type(data) == "table" and data or {}
+    data.external_claim = true
     return self:Register(entity, data)
 end
 
@@ -386,6 +394,15 @@ function EntityRegistry.Unregister(self, guid_or_entity, from_onremove)
         return false, Diagnostics.ERROR_CODES.ENTITY_NOT_FOUND
     end
 
+    if self.profile_service ~= nil
+        and type(self.profile_service.OnEntityUnregistered) == "function" then
+        ProtectedCall(
+            self.profile_service.OnEntityUnregistered,
+            self.profile_service,
+            record
+        )
+    end
+
     self.records_by_guid[guid] = nil
     for index = 1, #self.entity_order do
         if self.entity_order[index] == guid then
@@ -406,6 +423,41 @@ function EntityRegistry.Unregister(self, guid_or_entity, from_onremove)
     ClearMemberComponent(record.entity, self.instance_id)
     ClearManagedFields(record.entity, self.instance_id)
     return true
+end
+
+function EntityRegistry.UpdateProfile(self, guid_or_entity, profile_id, profile_version)
+    local record = type(guid_or_entity) == "table"
+        and self:GetByEntity(guid_or_entity)
+        or self:Get(guid_or_entity)
+    if record == nil then
+        return false, Diagnostics.ERROR_CODES.ENTITY_NOT_FOUND
+    end
+    if profile_id ~= nil and not IsNonEmptyString(profile_id) then
+        return false, Diagnostics.ERROR_CODES.ENTITY_REGISTRATION_FAILED
+    end
+    if profile_version ~= nil and not IsPositiveInteger(profile_version) then
+        return false, Diagnostics.ERROR_CODES.ENTITY_REGISTRATION_FAILED
+    end
+    record.profile_id = profile_id
+    record.profile_version = profile_version
+    if record.entity ~= nil then
+        record.entity._agon_profile_id = profile_id
+        record.entity._agon_profile_version = profile_version
+    end
+    local member = record.entity ~= nil and record.entity.components ~= nil
+        and record.entity.components.agon_instance_member or nil
+    if member ~= nil and type(member.SetMembership) == "function" then
+        local ok = member:SetMembership(
+            record.instance_id,
+            record.scope_id,
+            record.generation,
+            record
+        )
+        if ok == false then
+            return false, Diagnostics.ERROR_CODES.ENTITY_REGISTRATION_FAILED
+        end
+    end
+    return true, record
 end
 
 function EntityRegistry.Remove(self, guid_or_entity)
@@ -501,6 +553,7 @@ function EntityRegistry.GetSnapshot(self)
                     cleanup_policy = record.cleanup_policy,
                     profile_id = record.profile_id,
                     profile_version = record.profile_version,
+                    external_claim = record.external_claim,
                     parent_entity_id = record.parent_entity_id,
                     root_owner_entity_id = GetGuid(record.root_owner_entity),
                     spawn_source = record.spawn_source,
@@ -558,6 +611,7 @@ local function AttachMethods(registry)
     registry.Register = EntityRegistry.Register
     registry.Claim = EntityRegistry.Claim
     registry.Inherit = EntityRegistry.Inherit
+    registry.UpdateProfile = EntityRegistry.UpdateProfile
     registry.Unregister = EntityRegistry.Unregister
     registry.Remove = EntityRegistry.Remove
     registry.RemoveGuids = EntityRegistry.RemoveGuids
@@ -578,6 +632,7 @@ function EntityRegistry.New(instance_id)
         instance_id = instance_id,
         records_by_guid = {},
         entity_order = {},
+        profile_service = nil,
     })
 end
 

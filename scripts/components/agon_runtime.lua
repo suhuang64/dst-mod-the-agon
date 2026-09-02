@@ -6,6 +6,7 @@ local ZoneManager = require("agon/core/zone_manager")
 local InstanceManager = require("agon/core/instance_manager")
 local ModeRegistry = require("agon/modes/mode_registry")
 local CommonServiceRegistry = require("agon/services/common_service_registry")
+local EntityProfileRegistry = require("agon/services/entity_profile_registry")
 local TestModeDefinition = require("agon/modes/test_mode/definition")
 local SceneService = require("agon/world/scene_service")
 local AudienceStateChannel = require("agon/net/audience_state_channel")
@@ -13,6 +14,7 @@ local Rpc = require("agon/net/rpc")
 local Classified = require("agon/net/classified")
 local Wp4Diagnostics = require("agon/modes/test_mode/wp4_diagnostics")
 local Wp5Diagnostics = require("agon/modes/test_mode/wp5_diagnostics")
+local Wp6Diagnostics = require("agon/modes/test_mode/wp6_diagnostics")
 
 local function IsNonEmptyString(value)
     return type(value) == "string" and value ~= ""
@@ -74,6 +76,7 @@ local AgonRuntime = Class(function(self, inst)
     self.zone_manager = nil
     self.mode_registry = nil
     self.common_service_registry = nil
+    self.entity_profile_registry = nil
     self.scene_service = nil
     self.instance_manager = nil
     self.audience_state_channel = nil
@@ -104,6 +107,9 @@ function AgonRuntime:OnSave()
             core_status = self.core_status,
             zone_manager = self.zone_manager:GetSnapshot(),
             instance_manager = self.instance_manager:GetSnapshot(),
+            entity_profile_registry = self.entity_profile_registry ~= nil
+                and self.entity_profile_registry:GetSnapshot()
+                or nil,
             audience_state_channel = self.audience_state_channel ~= nil
                 and self.audience_state_channel:GetSnapshot()
                 or nil,
@@ -199,6 +205,7 @@ function AgonRuntime:FailCore(code, message, context)
     self.zone_manager = nil
     self.mode_registry = nil
     self.common_service_registry = nil
+    self.entity_profile_registry = nil
     self.scene_service = nil
     self.instance_manager = nil
     self.audience_state_channel = nil
@@ -239,6 +246,32 @@ function AgonRuntime:InitializeCore()
         )
     end
 
+    local entity_profile_registry = EntityProfileRegistry.New()
+    local registered_mode = mode_registry:Get(TestModeDefinition.mode_id)
+    if entity_profile_registry == nil or registered_mode == nil
+        or type(registered_mode.RegisterProfiles) ~= "function" then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "EntityProfileRegistry initialization failed"
+        )
+    end
+    local profiles_registered, profiles_code = registered_mode.RegisterProfiles(
+        entity_profile_registry
+    )
+    if not profiles_registered then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "TestMode profile registration failed: " .. tostring(profiles_code)
+        )
+    end
+    local profiles_valid, profiles_valid_code = entity_profile_registry:Validate()
+    if not profiles_valid then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "EntityProfileRegistry validation failed: " .. tostring(profiles_valid_code)
+        )
+    end
+
     local common_service_registry = CommonServiceRegistry.New()
     if common_service_registry == nil then
         return self:FailCore(
@@ -269,6 +302,7 @@ function AgonRuntime:InitializeCore()
         scene_service = scene_service,
         world = self.inst,
         common_service_registry = common_service_registry,
+        profile_registry = entity_profile_registry,
     })
     if instance_manager == nil then
         return self:FailCore(
@@ -318,6 +352,7 @@ function AgonRuntime:InitializeCore()
     self.zone_manager = zone_manager
     self.mode_registry = mode_registry
     self.common_service_registry = common_service_registry
+    self.entity_profile_registry = entity_profile_registry
     self.scene_service = scene_service
     self.instance_manager = instance_manager
     self.audience_state_channel = audience_state_channel
@@ -778,6 +813,23 @@ function AgonRuntime:RunWP5Diagnostics()
     return passed, code
 end
 
+function AgonRuntime:RunWP6Diagnostics()
+    if not self:IsReady() then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local passed, code = Wp6Diagnostics.Run(self)
+    Diagnostics.Log(
+        passed and Diagnostics.RESULTS.WP6_TEST_PASS or code,
+        {
+            shard_id = self.shard_id,
+            operation = "wp6_diagnostics",
+            core_status = self.core_status,
+        },
+        passed and "WP6 entity profile diagnostics passed" or tostring(code)
+    )
+    return passed, code
+end
+
 function AgonRuntime:CreateInstance(mode_id, userids)
     if not self:IsReady() then
         return nil, Diagnostics.ERROR_CODES.CORE_NOT_READY
@@ -820,6 +872,14 @@ function AgonRuntime:ValidateCore()
     local zones_valid, zones_code = self.zone_manager:Validate()
     if not zones_valid then
         return false, zones_code
+    end
+    if self.entity_profile_registry == nil
+        or type(self.entity_profile_registry.Validate) ~= "function" then
+        return false, Diagnostics.ERROR_CODES.CORE_INIT_FAILED
+    end
+    local profiles_valid, profiles_code = self.entity_profile_registry:Validate()
+    if not profiles_valid then
+        return false, profiles_code
     end
     return self.instance_manager:Validate()
 end
