@@ -1101,6 +1101,14 @@ scripts/agon/modes/test_mode/runtime.lua
 - Instance 结束后死亡玩家仍通过 PlayerSandbox 恢复。
 - 远距离网络实体可见性和 camera bounds 必须实服压测；不得硬编码未经验证的“17 格”。
 
+### WP8 当前状态（2026-09-02）
+
+- 状态：LobbyService、SpectatorService、PlayerDeathPolicy、`agon_spectator_echo`、classified spectator state、Spectator RPC 白名单及 TestMode WP8 diagnostics 已实现并接入 Runtime、InstanceManager、Participant 和 Common Services；GHOST 与 REVIVABLE_CORPSE 按 Instance 独立配置。
+- 官方专服 `Test/World01`（版本 `747465`、Build `4239`，端口 `12000`、Master shard `11889`）已通过 `WP8_TEST_PASS` 和 `WP8_VALIDATE_CORE=true`；同一进程的 `WP4_TEST_PASS`、`WP5_TEST_PASS`、`WP6_TEST_PASS`、`WP7_TEST_PASS` 也全部通过。WP4 旧诊断夹具已补齐显式合成沙箱状态，避免被 WP7 的 live mutation 硬门误判。
+- 本次服务端覆盖：Lobby return point/safe point、Spectator 无 Participant/Sandbox、唯一 Echo、跨 Instance 观战和 gameplay 拒绝、退出/Instance 清理、GHOST 边界、Corpse 同局救援与重复完成幂等；`c_shutdown()` 完成序列化并正常退出，进程和 `12000/11889` 端口均已清理。
+- 尚未完成：真实双客户端/UI 与 StateGraph 动画、跨 shard 网络路径、远距离实体可见性和 camera bounds 压测、真实玩家断线重绑定，以及 WP9 的重启中止/完整玩家恢复清理。这些仍是后续 WP9/WP10 的实服边界，不把合成诊断当作 Base Release Gate。
+- 两条官方 `hermitcrab_relocation_manager` / `wagpunk_arena_manager` set-piece angle 错误继续按既有决定只记录、不处理。
+
 ### 建议 Commit
 
 ```text
@@ -1124,7 +1132,9 @@ scripts/agon/persistence/migrations.lua
 scripts/agon/net/rpc.lua
 scripts/agon/net/audience_state_channel.lua
 scripts/agon/backend/backend_adapter.lua
+scripts/agon/player/restore_queue.lua
 scripts/agon/debug/diagnostics.lua
+scripts/agon/modes/test_mode/wp9_diagnostics.lua
 ```
 
 ### 实施步骤
@@ -1149,6 +1159,12 @@ scripts/agon/debug/diagnostics.lua
 - 损坏或未知 schema 不静默加载；给出可定位错误和安全降级。
 - QUARANTINED Zone 不再自动分配，但其他 Zone 正常工作。
 - 无权限客户端无法读取其他 audience 或调用管理员接口。
+
+### 当前状态（2026-09-02）
+
+- WP9 的持久化 schema/migration、`ABORT_ON_RESTART` 活动 Instance 中止、Scene/Zone 清理、Sandbox 恢复队列、RPC/Audience 保存收口和 BackendAdapter 已实现；官方 `klei/Test/World01` 已完成 WP4–WP9 回归。
+- 已完成一次真实活动 Instance 的 `c_save()`、`c_shutdown()`、同存档重启和恢复校验：活动 Instance 不续跑，`free_zone_count=10/10`，恢复队列 pending snapshot 保留，`ValidateCore=true`；随后回滚到测试前快照并完成干净关服。
+- 尚未达到 WP10 Base Release Gate：真实双客户端/UI、四个生命周期阶段的人工重启矩阵、真实玩家断线重连状态恢复、第二 shard/cross-shard、真实 Backend transport 和完整故障注入/QUARANTINED 修复仍需后续验收。WP9 的完成状态是“实现与单 shard 服务端合成/跨重启验证完成”，不是全链路发布完成。
 
 ### 建议 Commit
 

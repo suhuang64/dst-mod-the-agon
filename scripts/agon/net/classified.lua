@@ -12,6 +12,7 @@ Classified.NETWORK_FIELDS =
     PARTICIPANT_STATE = "participant_state",
     GENERATION = "generation",
     STATE_PAYLOAD = "state_payload",
+    SPECTATOR_STATE = "spectator_state",
 }
 
 local function Encode(value)
@@ -66,6 +67,11 @@ function Classified.Configure(inst)
         "agon_player_classified.state_payload",
         "agon_state_dirty"
     )
+    inst.agon_spectator_state = net_string(
+        inst.GUID,
+        "agon_player_classified.spectator_state",
+        "agon_spectator_dirty"
+    )
     return true
 end
 
@@ -99,6 +105,9 @@ function Classified.ClearParticipant(inst)
     if inst.agon_state_payload ~= nil then
         inst.agon_state_payload:set("")
     end
+    if inst.agon_spectator_state ~= nil then
+        inst.agon_spectator_state:set("")
+    end
     return true
 end
 
@@ -114,6 +123,18 @@ function Classified.SetAudiencePayload(inst, payload)
     return true
 end
 
+function Classified.SetSpectatorState(inst, state)
+    if inst == nil or inst.agon_spectator_state == nil then
+        return false
+    end
+    local encoded = Encode(state or {})
+    if #encoded > 60000 then
+        return false
+    end
+    inst.agon_spectator_state:set(encoded)
+    return true
+end
+
 function Classified.GetClientState(inst)
     if inst == nil then
         return nil
@@ -126,6 +147,7 @@ function Classified.GetClientState(inst)
         participant_state = ReadNetValue(inst.agon_participant_state, ""),
         generation = ReadNetValue(inst.agon_generation, 0),
         state_payload = ReadNetValue(inst.agon_state_payload, ""),
+        spectator_state = ReadNetValue(inst.agon_spectator_state, ""),
     }
 end
 

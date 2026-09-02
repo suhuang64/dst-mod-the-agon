@@ -4,6 +4,7 @@ local ScenePlans = require("agon/modes/test_mode/scene_plans")
 local TestModeDecisions = require("agon/modes/test_mode/decisions")
 local TestModeEffects = require("agon/modes/test_mode/effects")
 local PlayerProfile = require("agon/player/player_profile")
+local DeathPolicy = require("agon/player/death_policy")
 
 local TestModeRuntime = {}
 TestModeRuntime.SCHEMA_VERSION = 1
@@ -49,8 +50,20 @@ local function AttachMethods(runtime)
     runtime.GetGroup = TestModeRuntime.GetGroup
     runtime.GetPhase = TestModeRuntime.GetPhase
     runtime.GetPlayerProfile = TestModeRuntime.GetPlayerProfile
+    runtime.GetDeathMode = TestModeRuntime.GetDeathMode
+    runtime.CreateDeathPolicy = TestModeRuntime.CreateDeathPolicy
     runtime.OnSave = TestModeRuntime.OnSave
     return runtime
+end
+
+local function ResolveDeathMode(instance)
+    if type(instance) ~= "table" then
+        return DeathPolicy.MODES.GHOST
+    end
+    if instance.death_mode ~= nil then
+        return instance.death_mode
+    end
+    return DeathPolicy.MODES.GHOST
 end
 
 function TestModeRuntime.New(instance, services)
@@ -68,6 +81,7 @@ function TestModeRuntime.New(instance, services)
         instance_id = instance.instance_id,
         instance = instance,
         services = services or {},
+        death_mode = ResolveDeathMode(instance),
         state = "CREATED",
         group = nil,
         phase = nil,
@@ -94,6 +108,20 @@ function TestModeRuntime.GetPlayerProfile(self, participant)
         return nil
     end
     return PlayerProfile.Copy(TEST_PLAYER_PROFILE)
+end
+
+function TestModeRuntime.GetDeathMode(self)
+    return self.death_mode
+end
+
+function TestModeRuntime.CreateDeathPolicy(self)
+    return DeathPolicy.New(
+        self.instance,
+        {
+            mode = self.death_mode,
+            now_fn = self.instance.now_fn,
+        }
+    )
 end
 
 function TestModeRuntime.CreateGroupVote(self, decision_id, candidates, options)
@@ -226,6 +254,7 @@ function TestModeRuntime.OnSave(self)
         mode_version = self.mode_version,
         instance_id = self.instance_id,
         state = self.state,
+        death_mode = self.death_mode,
         group_id = self.group ~= nil and self.group:GetId() or nil,
         phase_id = self.phase ~= nil and self.phase.phase_id or nil,
         effect_apply_count = self.effect_apply_count,

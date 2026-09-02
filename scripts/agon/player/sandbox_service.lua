@@ -148,7 +148,12 @@ local function ExportTransaction(transaction)
         state = transaction.state,
         profile = Util.CopyPureData(transaction.profile),
         snapshot = Util.CopyPureData(transaction.snapshot),
+        snapshot_serializable = transaction.snapshot_serializable ~= false,
         character_prefab = transaction.character_prefab,
+        adapter_ids = transaction.context ~= nil
+            and Util.CopyPureData(transaction.context.adapter_ids)
+            or nil,
+        clean_entered = transaction.clean_entered == true,
         created_at = transaction.created_at,
         captured_at = transaction.captured_at,
         sandboxed_at = transaction.sandboxed_at,
@@ -156,6 +161,7 @@ local function ExportTransaction(transaction)
         restored_at = transaction.restored_at,
         committed_at = transaction.committed_at,
         restore_attempts = transaction.restore_attempts,
+        updated_at = transaction.updated_at,
         last_error_code = transaction.last_error_code,
         last_error_message = transaction.last_error_message,
     }
@@ -322,6 +328,7 @@ function SandboxService.CaptureOriginal(self, participant, player, profile)
         return nil, validate_code or SandboxService.ERROR_CODES.CAPTURE_VALIDATION_FAILED
     end
     transaction.captured_at = GetNow(self)
+    transaction.snapshot_serializable = true
     SaveState(self, transaction, SandboxService.STATES.CAPTURED)
     return transaction
 end

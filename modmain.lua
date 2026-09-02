@@ -6,6 +6,7 @@
 PrefabFiles =
 {
     "agon_player_classified",
+    "agon_spectator_echo",
 }
 
 -- WP4：RPC 定义和 classified 必须在客户端/服务端共享注册区无条件加载；
@@ -236,6 +237,33 @@ if GetModConfigData("enable_agon") == true then
         "运行 The Agon WP7 的玩家沙箱、统一 Profile、恢复、重试和故障隔离诊断。",
         function(runtime)
             runtime:RunWP7Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
+        "agon.test.wp8",
+        {},
+        "运行 The Agon WP8 的大厅、观战残影、观战隔离和死亡策略诊断。",
+        function(runtime)
+            runtime:RunWP8Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
+        "agon.test.wp9",
+        {},
+        "运行 The Agon WP9 的持久化、重启恢复队列和后端幂等边界诊断。",
+        function(runtime)
+            runtime:RunWP9Diagnostics()
+        end
+    )
+
+    RegisterAgonAdminCommand(
+        "agon.recovery",
+        {},
+        "显示 The Agon 重启恢复、玩家恢复队列和后端 pending 状态。",
+        function(runtime)
+            runtime:DebugRecovery()
         end
     )
 

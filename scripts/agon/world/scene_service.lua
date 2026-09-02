@@ -120,6 +120,35 @@ local function IsValidEntity(entity)
     return ok and valid == true
 end
 
+local function HasTag(entity, tag)
+    if entity == nil or type(entity.HasTag) ~= "function" then
+        return false
+    end
+    local ok, result = ProtectedCall(entity.HasTag, entity, tag)
+    return ok and result == true
+end
+
+local function IsPlayerEntity(entity)
+    if entity == nil then
+        return false
+    end
+    if IsNonEmptyString(entity.userid) or HasTag(entity, "player") then
+        return true
+    end
+    return entity.components ~= nil and entity.components.playercontroller ~= nil
+end
+
+local function RemoveEntity(entity)
+    if not IsValidEntity(entity) then
+        return true
+    end
+    if type(entity.Remove) ~= "function" then
+        return false
+    end
+    local ok = ProtectedCall(entity.Remove, entity)
+    return ok
+end
+
 local function GetTileSet(plan, terrain)
     local doomed = {}
     local changes = {}
@@ -870,6 +899,64 @@ function SceneService.Reset(self, instance, reason)
     return true
 end
 
+-- WP9：重启采用 ABORT_ON_RESTART；此处只清理保存 Instance 的实体和地形，
+-- 不重新构造 Mode、Scope、Group 或玩家 Participant。
+function SceneService.RecoverSnapshot(self, snapshot, zone, reason)
+    if type(snapshot) ~= "table"
+        or not IsNonEmptyString(snapshot.instance_id)
+        or type(zone) ~= "table"
+        or not IsBounds(zone.hard_bounds) then
+        return false, Diagnostics.ERROR_CODES.SCENE_APPLY_FAILED
+    end
+
+    local occupants, occupants_code = self.terrain:FindOccupants(zone.hard_bounds)
+    if occupants == nil then
+        return false, occupants_code or Diagnostics.ERROR_CODES.TERRAIN_API_UNAVAILABLE
+    end
+    for index = 1, #occupants do
+        if IsPlayerEntity(occupants[index].entity) then
+            return false, Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
+        end
+    end
+    for index = #occupants, 1, -1 do
+        if not RemoveEntity(occupants[index].entity) then
+            return false, Diagnostics.ERROR_CODES.ENTITY_REMOVE_FAILED
+        end
+    end
+
+    local remaining, remaining_code = self.terrain:FindOccupants(zone.hard_bounds)
+    if remaining == nil then
+        return false, remaining_code or Diagnostics.ERROR_CODES.TERRAIN_API_UNAVAILABLE
+    end
+    if #remaining > 0 then
+        return false, Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
+    end
+
+    local scene_snapshot = snapshot.scene
+    local scope_id = type(scene_snapshot) == "table"
+        and type(scene_snapshot.scope) == "table"
+        and scene_snapshot.scope.scope_id
+        or snapshot.instance_id .. ":recovery"
+    local scene_revision = type(scene_snapshot) == "table"
+        and scene_snapshot.scene_revision
+        or snapshot.scene_revision
+        or 0
+    local cleared, clear_code = self.terrain:ClearZone(
+        snapshot.instance_id,
+        zone,
+        scope_id,
+        scene_revision
+    )
+    if not cleared then
+        return false, clear_code or Diagnostics.ERROR_CODES.TILE_TRANSACTION_FAILED
+    end
+    local valid, valid_code = self.terrain:ValidateZoneCleared(zone)
+    if not valid then
+        return false, valid_code or Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
+    end
+    return true
+end
+
 function SceneService.Validate(self, instance)
     local context = self.instances_by_id[GetInstanceId(instance)]
     if context == nil then
@@ -959,6 +1046,7 @@ local function AttachMethods(service)
     service.ApplyPlan = SceneService.ApplyPlan
     service.ApplyModePlan = SceneService.ApplyModePlan
     service.Reset = SceneService.Reset
+    service.RecoverSnapshot = SceneService.RecoverSnapshot
     service.Validate = SceneService.Validate
     service.GetSnapshot = SceneService.GetSnapshot
     service.GetDebugLines = SceneService.GetDebugLines

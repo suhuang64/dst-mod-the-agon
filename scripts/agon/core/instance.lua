@@ -145,6 +145,10 @@ function Instance.GetRulePolicy(self)
     return self.rule_policy
 end
 
+function Instance.GetDeathPolicy(self)
+    return self.death_policy
+end
+
 function Instance.GetService(self, service_id)
     if type(service_id) ~= "string" or self.services == nil then
         return nil
@@ -206,6 +210,26 @@ function Instance.CloseServices(self, reason)
         return true
     end
     return false, Instance.ERROR_CODES.SCOPE_NOT_READY
+end
+
+function Instance.CloseDeathPolicy(self, reason)
+    if self.death_policy == nil
+        or type(self.death_policy.OnInstanceDestroy) ~= "function" then
+        return true, "NO_DEATH_POLICY"
+    end
+    if self.death_policy_closed then
+        return true, "ALREADY_CLOSED"
+    end
+    local ok, closed, code = ProtectedCall(
+        self.death_policy.OnInstanceDestroy,
+        self.death_policy,
+        reason or "instance_destroy"
+    )
+    if not ok or closed == false then
+        return false, code or Instance.ERROR_CODES.SCOPE_NOT_READY
+    end
+    self.death_policy_closed = true
+    return true
 end
 
 function Instance.GetGroup(self, group_id)
@@ -392,6 +416,12 @@ function Instance.ApplyScenePlan(self, plan)
 end
 
 function Instance.Validate(self)
+    if self.death_policy ~= nil and type(self.death_policy.Validate) == "function" then
+        local death_valid, death_code = self.death_policy:Validate()
+        if not death_valid then
+            return false, death_code or Instance.ERROR_CODES.SCOPE_NOT_READY
+        end
+    end
     if self.scene_service ~= nil then
         return self.scene_service:Validate(self)
     end
@@ -453,6 +483,19 @@ function Instance.CreateModeRuntime(self)
         return false, callback_code or Instance.ERROR_CODES.MODE_RUNTIME_REJECTED
     end
     self.mode_runtime = runtime
+    if type(runtime.CreateDeathPolicy) == "function" then
+        local policy_ok, policy, policy_code = ProtectedCall(
+            runtime.CreateDeathPolicy,
+            runtime
+        )
+        if not policy_ok or policy == nil then
+            self.mode_runtime = nil
+            return false,
+                policy_code or Instance.ERROR_CODES.MODE_RUNTIME_REJECTED
+        end
+        self.death_policy = policy
+        self.death_policy_closed = false
+    end
     return true
 end
 
@@ -624,6 +667,10 @@ function Instance.GetSnapshot(self)
         result = CopyValue(self.result),
         scene_plan = CopyValue(self.scene_plan),
         scene_transactions = {},
+        death_policy = self.death_policy ~= nil
+            and type(self.death_policy.GetSnapshot) == "function"
+            and self.death_policy:GetSnapshot()
+            or nil,
         participants = {},
         groups = {},
         services = {},
@@ -695,10 +742,12 @@ local function AttachMethods(instance)
     instance.GetEntityRegistry = Instance.GetEntityRegistry
     instance.GetRng = Instance.GetRng
     instance.GetRulePolicy = Instance.GetRulePolicy
+    instance.GetDeathPolicy = Instance.GetDeathPolicy
     instance.GetService = Instance.GetService
     instance.ListServices = Instance.ListServices
     instance.InitializeServices = Instance.InitializeServices
     instance.CloseServices = Instance.CloseServices
+    instance.CloseDeathPolicy = Instance.CloseDeathPolicy
     instance.GetGroup = Instance.GetGroup
     instance.ListGroups = Instance.ListGroups
     instance.CreateGroup = Instance.CreateGroup
@@ -781,6 +830,9 @@ function Instance.New(instance_id, definition, zone, options)
         resource_owner = options.owner,
         participant_manager = options.participant_manager,
         rule_policy = options.rule_policy,
+        death_mode = options.death_mode,
+        death_policy = nil,
+        death_policy_closed = false,
     }
     local rng, rng_code = InstanceRng.New(options.seed or instance_id)
     if rng == nil then

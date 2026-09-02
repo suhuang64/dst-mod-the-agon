@@ -784,3 +784,125 @@ docs(base): 修正执行日志文件名
 - 修改后重新启动官方专服 `Test/World01`（版本 `747465`、Build `4239`，端口 `12000`、Master shard `11889`），日志确认 `LAYOUT_READY` 和 `CORE_READY`，并输出 `WP7_TEST_PASS`、`WP5_TEST_PASS`、`WP6_TEST_PASS` 以及 `WP7_VALIDATE_CORE=true`。
 - 末次 `c_shutdown()` 正常完成序列化快照 `#25`、`#26` 并退出；复核无 `dontstarve_dedicated_server_nullrenderer_x64` 进程、无 `12000/11889` 监听端口。末次日志仍只有既知的 `hermitcrab_relocation_manager` 与 `wagpunk_arena_manager` set-piece angle 错误，没有新增 Lua/runtime 错误。
 - `git diff --check` 通过；没有全局安装 Lua 工具。当前仍不执行 commit、push；本条继续遵守 append-only 记录规则。
+
+### 1.27 2026-09-02：WP8 Lobby、Spectator 与 PlayerDeathPolicy 启动
+
+#### 任务范围与当前状态
+
+- 本轮目标：开始实现 WP8 的 Lobby 返回点、安全恢复点、只读 Spectator、唯一 `agon_spectator_echo`、服务端观战 RPC 白名单，以及 Instance-aware 的 GHOST / REVIVABLE_CORPSE 死亡策略。
+- 当前基线：WP7 已在 `86092dc feat(sandbox): 实现玩家状态沙箱与幂等恢复事务` 收口；开始本轮前 `the-agon` 工作树无未提交修改，WP1–WP7 文档和代码作为既有基线保留。
+- 已核对现有代码：`LobbyService` 当前仅负责 Portal-relative 大厅 worldgen 和逐 Tile 校验；`LayoutService` 已解析 `layout.lobby` 的 Portal-relative `safe_bounds/build_bounds/hard_bounds`，但尚无运行时大厅会话；`ScenePlan/SceneService` 已提供 `spectator_anchors`、`spectator_camera_bounds`、`emergency_safe_points`；`Participant` 已有 `GHOST/CORPSE` 状态和 `death_state`，但尚无死亡策略实现。
+
+#### 官方源码依据与设计边界
+
+- 已核对只读官方源码：`components/revivablecorpse.lua` 通过 `corpse` 标签、`SetCanBeRevivedByFn` 和 `CanBeRevivedBy` 提供尸体救援接口；`components/spectatorcorpse.lua` 的职责是本地相机焦点，不应被当作服务端实例隔离层；`components/playercontroller.lua` 支持服务端 `Enable(false)`；官方玩家实体使用 `Physics:SetActive(false/true)`、`DynamicShadow:Enable(false/true)`、`MiniMapEntity:SetEnabled(false/true)` 和实体 Hide/Show 进行可逆保护。
+- 观战者保持 Lobby/无 Participant 身份，不进入目标 Instance 的 PlayerSandbox；目标 Instance、scene revision、anchor 和 return position 全部显式记录；不硬编码“17 格”或假定世界原点。服务端拒绝跨 Instance 的 gameplay/观战目标；Echo 不添加 gameplay、AI、碰撞或持久化能力。
+- `PlayerDeathPolicy` 是每个 Instance 的策略对象，死亡者仍留在 Participant 索引中；GHOST 只允许在该 Instance Zone 的安全边界内移动；REVIVABLE_CORPSE 禁止移动且救援者必须是同一 Instance 的合法活跃 Participant。WP8 首先覆盖可确定的服务端策略和合成玩家；官方全局 GameMode/StateGraph 事件链不在此处伪造，真实客户端死亡动画、观战输入、远距离网络实体可见性与 camera bounds 压测必须实服补测。
+
+#### 验证计划
+
+- 新增 WP8 合成 diagnostics，覆盖两个并发 Instance 使用不同死亡策略、Portal-relative Lobby 点、Spectator 无 Sandbox/唯一 Echo/退出清理、规则拒绝、Ghost 边界、Corpse 同局救援、实例销毁和 WP5–WP7 回归。
+- 随后使用官方 `Test/World01` 启动、执行诊断、`ValidateCore()`、`c_shutdown()`，并确认进程和端口清理；WP1 两条已知 set-piece angle 错误继续按既有决定延后。
+
+### 1.28 2026-09-02：WP8 第一版实现与接线
+
+- 已新增 `scripts/agon/player/spectator_service.lua`、`death_policy.lua`、`scripts/prefabs/agon_spectator_echo.lua` 和 `scripts/agon/modes/test_mode/wp8_diagnostics.lua`；LobbyService 在既有 Portal-relative worldgen/校验上增加运行时大厅会话、有限安全点、return position、观战返回状态和清理接口。
+- `AgonRuntime` 已统一创建 Lobby/Spectator；`InstanceManager` 在 Instance 销毁、Participant 移除和玩家附加时接入死亡策略；TestMode 支持通过 `CreateInstance(..., { death_mode = ... })` 选择 `GHOST` 或 `REVIVABLE_CORPSE`。死亡者继续保留在 Participant，不转成 Spectator。
+- 观战者不进入 PlayerSandbox；真实玩家只施加可逆的隐藏、阴影/小地图/物理/控制器/受击保护，残影是无 gameplay、AI、碰撞和持久化能力的独立 Prefab；classified 增加 spectator state 字段，RPC 对观战 Enter/Exit/Target 单独执行目标 Instance 与会话校验。
+- 修正 `agon_spectator_echo` 的官方初始化顺序：`net_string` 必须在 `SetPristine()` 前注册；同时禁止同一观战会话通过一次 Enter 请求直接切换到另一 Instance。
+- 当前尚未宣称实测通过；下一步是官方 `Test/World01` 加载与 WP8 合成诊断，并回归 WP5–WP7、`ValidateCore`、`c_shutdown()`、进程/端口清理。已知两条 set-piece angle 错误仍按既有决定延后。
+
+### 1.29 2026-09-02：WP8 第一次官方诊断失败与修正
+
+- 官方 `Test/World01` 已成功加载新的 `agon_spectator_echo` Prefab、`CORE_READY` 和 Lobby/Spectator 服务；WP8 合成诊断完成并发 Instance、Lobby/观战进入退出、Echo 隔离、跨 Instance 访问拒绝、GHOST 边界和同局尸体救援后，在重复调用 `CompleteRevive` 的幂等断言处失败。
+- 失败原因：`DeathPolicy.ResolveReviveSession` 对外部传入的旧 session table 只检查 `revive_id/instance_id`，没有确认它仍是当前 `self.revive_session`；首次完成后再次提交旧对象会继续进入配对校验并返回 `REVIVE_FAILED`，没有稳定返回 `REVIVE_NOT_FOUND`。
+- 已收紧为只接受当前活动 session 的同一 `revive_id`；活动 session 已清空后，旧 session 会按不存在处理。该修正没有放宽救援权限，也没有修改玩家物品/技能状态。
+- 本轮第一次服务端进程尚未收尾；修正后将重启同一官方 `Test/World01`，再执行 WP8 及 WP5–WP7 回归和完整关闭检查。
+
+### 1.30 2026-09-02：WP8 回归暴露的 WP4 合成玩家修正
+
+- WP8 第二次官方诊断及 WP5、WP6、WP7 回归已通过，但 WP4 在附加合成玩家时返回 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED`。原因是 WP7 引入了真实玩家 live mutation 硬门，而 WP4 旧诊断的 `MakeTestPlayer` 只有 `userid/IsValid`，没有声明 `agon_sandbox_test` 和完整 `agon_sandbox_state`；这是诊断夹具过时，不是 WP8 观战或死亡策略故障。
+- 已为 `scripts/agon/modes/test_mode/wp4_diagnostics.lua` 的两个合成玩家补齐显式沙箱标记和合法的 Inventory、SurvivalStats、SkillTree、Character、movement_speed 状态，保持真实玩家默认拒绝 live mutation 的安全策略不变。
+- 已对修正前的官方专服执行 `c_shutdown()`；World01 正常保存并退出，复核 `dontstarve_dedicated_server_nullrenderer_x64` 进程不存在、`12000/11889` 无监听端口。待下一次重启后重新执行 WP4–WP8 全套回归。
+- 本条继续遵守 append-only 记录规则；没有执行 commit、push 或历史改写。
+
+### 1.31 2026-09-02：WP8 官方 Test/World01 完整复测通过
+
+#### 实现与诊断修正
+
+- `scripts/agon/modes/test_mode/wp4_diagnostics.lua` 已为旧 WP4 合成玩家补齐 `agon_sandbox_test=true` 和完整合法 `agon_sandbox_state`；该修正只更新测试夹具，使其符合 WP7 的真实玩家 live mutation 硬门。
+- WP8 的 Lobby、Spectator、Echo、Spectator RPC 白名单、GHOST 和 REVIVABLE_CORPSE 代码沿用 1.28–1.29 的实现与幂等修正；没有放宽跨 Instance 访问或真实玩家状态修改权限。
+
+#### 官方专服证据
+
+- 使用官方 `D:\SteamLibrary\steamapps\common\Don't Starve Together\bin64\dontstarve_dedicated_server_nullrenderer_x64.exe`，参数为 `-persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01`；版本 `747465`、Build `4239`，World01 端口 `12000`、Master shard 端口 `11889`。
+- 新进程日志确认 `LAYOUT_READY`、`CORE_READY` 和 `agon_spectator_echo` Prefab 正常注册；通过 Runtime 正式诊断入口依次得到：`WP4_TEST_PASS`、`WP5_TEST_PASS`、`WP6_TEST_PASS`、`WP7_TEST_PASS`、`WP8_TEST_PASS`；随后 `TheWorld.components.agon_runtime:ValidateCore()` 输出 `WP8_VALIDATE_CORE=true`。
+- WP8 诊断实际覆盖并发 Instance、Portal-relative Lobby 点、安全 return point、Spectator 不进入 Participant/Sandbox、唯一 Echo、跨 Instance 观战和 gameplay 拒绝、退出/Instance 清理、GHOST 边界、Corpse 同局救援、重复 `CompleteRevive` 幂等和死亡玩家恢复链路。
+
+#### 日志与收尾
+
+- 本次 `c_shutdown()` 正常完成 World01 序列化快照 `#31`、`#32` 并退出；复核 `dontstarve_dedicated_server_nullrenderer_x64` 进程不存在，`12000/11889` 无监听端口。
+- `server_log.txt` 的本次错误扫描没有新的 `LUA ERROR`、`stack traceback`、`bad argument`、`attempt to` 或 `nil value`；仅有既有两条 set-piece angle 错误：`wagpunk_arena_manager` 找不到 `hermitcrab_marker/beebox_hermit`，`hermitcrab_relocation_manager` 找不到 `monkeyqueen/monkeyportal`。按既有计划继续延后，不处理官方源码。
+- `git diff --check` 通过；PATH 仍没有 `lua`、`luac`、`stylua`，未全局安装任何工具。没有执行 commit、push、分支切换或历史改写；当前 WP8 代码和文档保持未提交，建议 Commit：
+
+  ```text
+  feat(player): 实现大厅观战与实例死亡策略
+  ```
+
+#### 尚未覆盖
+
+- 仍未完成真实双客户端/UI 与 StateGraph 动画、跨 shard 网络路径、远距离网络实体可见性和 camera bounds 压测、真实玩家断线重绑定，以及 WP9 的重启中止/完整玩家恢复清理；这些不由本次无客户端合成诊断冒充完成。
+
+### 1.32 2026-09-02：WP9 保存、重启中止、网络收口与后端边界启动
+
+#### 开始前状态与执行边界
+
+- 本轮承接 WP8，目标是落实 WP9：持久化 schema/migration、`ABORT_ON_RESTART` 恢复清理、玩家恢复队列、失败 Zone 隔离、RPC/Audience 快照收口，以及仅服务端可调用且幂等的 BackendAdapter 边界。
+- 开始前 `the-agon` 工作树已有 WP8 代码和文档未提交修改；本轮保留这些修改，不执行 commit、push、分支切换或历史改写。官方 `D:\OneDrive\DST\scripts` 继续只读使用。
+- 现有风险已明确：`InstanceManager:OnLoad()` 只记录并中止活动 Instance，尚未恢复 Zone/Scene；`SceneService` 尚无重启后清理入口；Sandbox 的 `RESTORE_PENDING` 尚未进入独立持久化队列；Runtime 尚未持久化恢复队列/后端 pending 状态；RPC/Audience 尚无受限 OnLoad；Instance 销毁前可能丢失未完成 restore transaction。
+
+#### 本轮实现与验证计划
+
+- 先补严格纯数据 schema、迁移、恢复队列和 BackendAdapter，再接入 Runtime/InstanceManager/ZoneManager/SceneService/RPC/Audience；保存内容不得包含函数、实体引用、task handle、观战会话或 UI 状态，恢复失败必须保留原始快照并进入 `RESTORE_PENDING/RESTORE_BLOCKED`，不得默认覆盖。
+- `ABORT_ON_RESTART` 不恢复可玩 Instance：启动时将保存的活动 Instance 标为恢复中止，先把可恢复玩家事务加入队列，再清理 scene scope、实体和 terrain；成功清理的 Zone 释放，清理失败的 Zone 进入 `QUARANTINED` 且不可复用。
+- 先运行静态差异/`git diff --check`，随后使用官方 `klei\Test\World01` 执行 WP4–WP9 回归、`ValidateCore()`、`c_shutdown()` 和进程/端口检查；另外创建一个真实保存的活动 Instance，重启同一官方专服，验证 `RECOVERY_COMPLETE/PARTIAL`、活动 Instance 不恢复、Zone 清理/隔离及 pending 快照不丢失。既有两条官方 set-piece angle 错误仍按计划延后。
+
+### 1.33 2026-09-02：WP9 实现、官方专服回归与跨重启恢复验收
+
+#### 实现收口与中途修正
+
+- 新增 `scripts/agon/persistence/schema.lua`、`scripts/agon/persistence/migrations.lua`、`scripts/agon/player/restore_queue.lua`、`scripts/agon/backend/backend_adapter.lua` 和 `scripts/agon/modes/test_mode/wp9_diagnostics.lua`；Runtime、InstanceManager、ZoneManager、SceneService、RPC、Audience、Sandbox 和 diagnostics 已接入对应保存/恢复边界。
+- 持久化 schema 只接受有限 Lua 纯数据，拒绝 function、实体引用、task handle、循环表、非法数字和未知 schema；v1 旧快照仅补 `persistence` envelope，不静默接受未知版本。恢复策略固定为 `ABORT_ON_RESTART`：活动 Instance 不续跑，先排队可恢复 Sandbox snapshot，再清理 Scene/Scope/entity/terrain，成功释放 Zone，失败隔离为 `QUARANTINED`。
+- 恢复队列保存 transaction/profile/adapter IDs/原始 adapter snapshot 和状态；`RESTORING` 在重启加载时回到 `RESTORE_PENDING`，恢复失败进入 `RESTORE_BLOCKED`，snapshot 在验证成功前不删除。RPC/Audience 的旧 Instance、Group、Spectator 状态不恢复为有效成员；BackendAdapter 仅允许服务端提交 `game_result`/`settlement`，无 transport 时保留 `PENDING`，相同 ID 的数据不可变且重复成功提交幂等。
+- 静态复核发现恢复队列原先只检查 snapshot 是 table，已补 `snapshot.adapters`、adapter ID 形状和纯数据校验，并用 protected call 包住 restore/validate；同时补充 Runtime 恢复摘要校验和 OnSave 的 core 子快照安全保留，避免可选字段异常时丢失活动 Instance 清理所需数据。
+
+#### 官方 `klei/Test/World01` 证据
+
+- 使用官方 `D:\SteamLibrary\steamapps\common\Don't Starve Together\bin64\dontstarve_dedicated_server_nullrenderer_x64.exe`，参数为 `-persistent_storage_root d:/OneDrive/DST/klei -conf_dir DoNotStarveTogether -cluster Test -shard World01`；版本 `747465`、Build `4239`，World01 端口 `12000`、Master shard 端口 `11889`。启动时从 WP8 的干净快照 `#32` 载入，首次 `RECOVERY_COMPLETE`/`CORE_READY` 均正常。
+- 首次启动依次执行 `RunWP9Diagnostics()`、`RunWP4Diagnostics()` 至 `RunWP8Diagnostics()`，全部输出 `WP9_TEST_PASS`、`WP4_TEST_PASS`、`WP5_TEST_PASS`、`WP6_TEST_PASS`、`WP7_TEST_PASS`、`WP8_TEST_PASS`；随后 `ValidateCore()` 输出 `WP9_VALIDATE:true`。WP9 合成诊断覆盖纯数据保存/迁移/未知 schema 拒绝、恢复队列状态与重载、后端 pending/不可变/幂等边界和正式清理。
+- 通过官方控制台创建并启动真实运行态 TestMode Instance：`START:true:nil:agon:1:77`。执行 `c_save()` 写入快照 `#33`，`c_shutdown()` 完成快照 `#34`、`#35` 后退出；进程和 `12000/11889` 端口均释放。
+- 使用同一 Cluster/Shard/存档再次启动，日志加载快照 `#35` 并输出 `RECOVERY_COMPLETE ... aborted_instance_count=1 pending_restore_count=1 quarantined_zone_count=0`。控制台校验输出：
+
+  ```text
+  AFTER_WP9_RESTART:0:1:10:10:1:true
+  ```
+
+  字段依次表示：活动 Instance 数 `0`、中止活动 Instance 数 `1`、FREE Zone `10/10`、恢复队列 pending `1`、`ValidateCore=true`。这证明活动 Instance 未续跑、Zone 已清场，断线玩家的原始快照仍保留在恢复队列。
+- 为清理本轮只用于测试的 pending 记录，确认目标为本轮新生成的快照后执行官方 `c_rollback(3)`，明确回滚并删除 `#33`–`#35`，恢复到测试前的干净 `#32`；回滚后的启动再次输出 `aborted_instance_count=0`、`pending_restore_count=0`、`free_zone_count=10`。最终控制台输出：
+
+  ```text
+  WP9_FINAL_CLEAN:0:10:10:0:0:true
+  ```
+
+  最终执行 `c_shutdown()` 完成快照 `#33`、`#34` 并正常退出；复核 `dontstarve_dedicated_server_nullrenderer_x64` 进程不存在，`12000/11889` 无监听端口。
+
+#### 结果与边界
+
+- 本轮 WP9 的模块加载、WP4–WP9 服务端合成回归、活动 Instance 保存/跨进程重启中止、Scene/Zone 清理、pending snapshot 保留、回滚清理和核心一致性验证通过。最新两份官方 `server_log` 未发现新的 `LUA ERROR`、`stack traceback`、`bad argument`、`attempt to call` 或 `nil value`。
+- 两条既有官方 set-piece angle 错误仍出现：`hermitcrab_relocation_manager` 缺少 `monkeyqueen/monkeyportal`，`wagpunk_arena_manager` 缺少 `hermitcrab_marker/beebox_hermit`；按用户已确定的计划继续只记录、不处理官方源码。
+- 尚未覆盖：真实双客户端/UI 和 StateGraph 动画、真实在线玩家各阶段断线重连后的实际物品/Stats/SkillTree 恢复、PREPARING/RUNNING/TRANSITION/FINISHING 四阶段人工重启矩阵、故障注入后的 QUARANTINED 修复、第二 shard/cross-shard、配置真实 Backend transport 的重复奖励联调，以及完整 WP10 Release Gate。服务端合成玩家和 TestMode 诊断不替代这些验收。
+- `git diff --check` 通过；PATH 中没有 `lua`、`luac`、`stylua`，未全局安装解析器。没有执行 commit、push、分支操作，也没有修改官方源码；建议 Commit：
+
+  ```text
+  feat(recovery): 完成重启中止与幂等恢复结算
+  ```

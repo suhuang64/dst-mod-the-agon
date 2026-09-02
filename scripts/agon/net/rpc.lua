@@ -1,6 +1,7 @@
 -- WP4：The Agon Client -> Server RPC 的统一授权、幂等和速率边界。
 
 local Diagnostics = require("agon/debug/diagnostics")
+local Schema = require("agon/persistence/schema")
 
 local Rpc = {}
 
@@ -10,6 +11,13 @@ Rpc.REQUEST_NAME = "request"
 Rpc.DEFAULT_WINDOW_SECONDS = 1
 Rpc.DEFAULT_MAX_REQUESTS = 20
 Rpc.MAX_REQUEST_ID_LENGTH = 96
+
+Rpc.SPECTATOR_ACTIONS =
+{
+    SPECTATOR_ENTER = true,
+    SPECTATOR_EXIT = true,
+    SPECTATOR_TARGET = true,
+}
 
 Rpc.ERROR_CODES =
 {
@@ -98,6 +106,10 @@ local function IsAllowedLifecycle(instance, request)
     return instance.lifecycle_state == "RUNNING"
 end
 
+local function IsSpectatorAction(action)
+    return Rpc.SPECTATOR_ACTIONS[action] == true
+end
+
 function Rpc.GetInstance(self, instance_id)
     if self.instance_manager == nil
         or type(self.instance_manager.Get) ~= "function" then
@@ -149,6 +161,10 @@ function Rpc.ResolveTarget(self, request)
     return GetEntityByGuid(request.target_guid)
 end
 
+function Rpc.IsSpectatorAction(self, action)
+    return IsSpectatorAction(action)
+end
+
 function Rpc.ValidateRequest(self, sender, request)
     if not IsValidSender(sender) then
         return false, Rpc.ERROR_CODES.INVALID_SENDER
@@ -196,36 +212,72 @@ function Rpc.ValidateRequest(self, sender, request)
     local participant = type(self.instance_manager.GetParticipant) == "function"
         and self.instance_manager:GetParticipant(userid)
         or nil
-    if participant == nil or participant.instance_id ~= instance.instance_id
-        or not participant:IsActive() then
-        return false, Rpc.ERROR_CODES.PARTICIPANT_NOT_FOUND
-    end
-
     local target = self:ResolveTarget(request)
-    if target ~= nil then
-        local allowed, ownership_code = self.rule_policy:CanInteract(
-            request.action,
-            sender,
-            target,
-            { instance_id = instance.instance_id }
-        )
-        if not allowed then
-            return false, ownership_code or Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+    local spectator_action = IsSpectatorAction(request.action)
+    local spectator_service = self.spectator_service
+
+    if spectator_action then
+        if spectator_service == nil then
+            return false, Rpc.ERROR_CODES.DISPATCH_FAILED
+        end
+
+        if request.action == "SPECTATOR_ENTER" then
+            -- Enter 的 instance_id 就是唯一允许观战的目标 Instance；
+            -- target_instance_id 只是显式字段，不能借此绕过代次/场景校验。
+            if request.target_instance_id ~= nil
+                and request.target_instance_id ~= request.instance_id then
+                return false, Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+            end
+            if participant ~= nil and participant:IsActive() then
+                return false, Rpc.ERROR_CODES.PARTICIPANT_NOT_FOUND
+            end
+        else
+            local session = type(spectator_service.GetSession) == "function"
+                and spectator_service:GetSession(userid)
+                or nil
+            if session == nil or session.instance_id ~= instance.instance_id then
+                return false, Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+            end
+            if request.action == "SPECTATOR_TARGET" and target ~= nil then
+                local target_instance_id = self.rule_policy:ResolveInstance(target)
+                if target_instance_id ~= instance.instance_id then
+                    return false, Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+                end
+            end
         end
     else
-        local sender_instance_id = self.rule_policy:ResolveInstance(sender)
-        if sender_instance_id ~= instance.instance_id then
-            return false, Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+        if participant == nil or participant.instance_id ~= instance.instance_id
+            or not participant:IsActive() then
+            return false, Rpc.ERROR_CODES.PARTICIPANT_NOT_FOUND
+        end
+
+        if target ~= nil then
+            local allowed, ownership_code = self.rule_policy:CanInteract(
+                request.action,
+                sender,
+                target,
+                { instance_id = instance.instance_id }
+            )
+            if not allowed then
+                return false, ownership_code or Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+            end
+        else
+            local sender_instance_id = self.rule_policy:ResolveInstance(sender)
+            if sender_instance_id ~= instance.instance_id then
+                return false, Rpc.ERROR_CODES.OWNERSHIP_FORBIDDEN
+            end
         end
     end
 
     return true, nil,
         {
+            sender = sender,
             userid = userid,
             instance = instance,
             participant = participant,
             target = target,
             now = now,
+            spectator_action = spectator_action,
         }
 end
 
@@ -241,7 +293,7 @@ function Rpc.Handle(self, sender, request)
             context,
             request
         )
-        if not ok or result == false then
+        if not ok or result ~= true then
             return false, dispatch_code or Rpc.ERROR_CODES.DISPATCH_FAILED
         end
     end
@@ -268,8 +320,48 @@ function Rpc.GetSnapshot(self)
         schema_version = Rpc.SCHEMA_VERSION,
         window_seconds = self.window_seconds,
         max_requests_per_window = self.max_requests_per_window,
+        max_remembered_requests = self.max_remembered_requests,
         seen_requests = seen_requests,
     }
+end
+
+function Rpc.OnLoad(self, data)
+    if data == nil then
+        return true
+    end
+    local copied, copy_code = Schema.CopyPure(data)
+    if type(copied) ~= "table"
+        or copied.schema_version ~= self.schema_version
+        or (copied.seen_requests ~= nil and type(copied.seen_requests) ~= "table") then
+        return false, copy_code or Rpc.ERROR_CODES.INVALID_REQUEST
+    end
+    self.rate_buckets = {}
+    self.seen_requests = {}
+    for userid, request_list in pairs(copied.seen_requests or {}) do
+        if not IsNonEmptyString(userid) or type(request_list) ~= "table" then
+            return false, Rpc.ERROR_CODES.INVALID_REQUEST
+        end
+        local requests = { order = {}, by_id = {} }
+        for index = 1, #request_list do
+            local item = request_list[index]
+            if type(item) ~= "table"
+                or not IsNonEmptyString(item.request_id)
+                or #item.request_id > Rpc.MAX_REQUEST_ID_LENGTH
+                or (item.timestamp ~= nil and not IsFiniteNumber(item.timestamp)) then
+                return false, Rpc.ERROR_CODES.INVALID_REQUEST
+            end
+            if requests.by_id[item.request_id] == nil then
+                table.insert(requests.order, item.request_id)
+            end
+            requests.by_id[item.request_id] = item.timestamp
+        end
+        while #requests.order > self.max_remembered_requests do
+            local expired = table.remove(requests.order, 1)
+            requests.by_id[expired] = nil
+        end
+        self.seen_requests[userid] = requests
+    end
+    return true
 end
 
 function Rpc.GetDebugString(self)
@@ -297,9 +389,11 @@ local function AttachMethods(rpc)
     rpc.RememberRequest = Rpc.RememberRequest
     rpc.CheckRate = Rpc.CheckRate
     rpc.ResolveTarget = Rpc.ResolveTarget
+    rpc.IsSpectatorAction = Rpc.IsSpectatorAction
     rpc.ValidateRequest = Rpc.ValidateRequest
     rpc.Handle = Rpc.Handle
     rpc.GetSnapshot = Rpc.GetSnapshot
+    rpc.OnLoad = Rpc.OnLoad
     rpc.GetDebugString = Rpc.GetDebugString
     return rpc
 end
@@ -322,6 +416,7 @@ function Rpc.New(options)
         runtime = options.runtime,
         instance_manager = options.instance_manager,
         rule_policy = options.rule_policy,
+        spectator_service = options.spectator_service,
         now_fn = options.now_fn,
         window_seconds = window_seconds,
         max_requests_per_window = max_requests,
@@ -343,7 +438,7 @@ function Rpc.Register()
     end
 
     AddModRPCHandler(Rpc.NAMESPACE, Rpc.REQUEST_NAME,
-    function(sender, instance_id, generation, scene_revision, request_id, action, target_guid)
+    function(sender, instance_id, generation, scene_revision, request_id, action, target_guid, target_instance_id)
         local world
         if type(GLOBAL) == "table" then
             world = GLOBAL.TheWorld
@@ -370,6 +465,7 @@ function Rpc.Register()
             request_id = request_id,
             action = action,
             target_guid = target_guid,
+            target_instance_id = target_instance_id,
         })
         if not accepted then
             Diagnostics.Log(
@@ -389,7 +485,7 @@ function Rpc.Register()
     return true
 end
 
-function Rpc.SendRequest(instance_id, generation, scene_revision, request_id, action, target_guid)
+function Rpc.SendRequest(instance_id, generation, scene_revision, request_id, action, target_guid, target_instance_id)
     if type(SendModRPCToServer) ~= "function"
         or type(GetModRPC) ~= "function" then
         return false, Rpc.ERROR_CODES.NOT_REGISTERED
@@ -405,7 +501,8 @@ function Rpc.SendRequest(instance_id, generation, scene_revision, request_id, ac
         scene_revision,
         request_id,
         action,
-        target_guid
+        target_guid,
+        target_instance_id
     )
     return true
 end

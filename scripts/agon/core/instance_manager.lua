@@ -4,6 +4,7 @@ local Instance = require("agon/core/instance")
 local Participant = require("agon/core/participant")
 local RulePolicy = require("agon/core/rule_policy")
 local CommonServiceRegistry = require("agon/services/common_service_registry")
+local Schema = require("agon/persistence/schema")
 
 local InstanceManager = {}
 InstanceManager.SCHEMA_VERSION = 1
@@ -28,6 +29,7 @@ InstanceManager.ERROR_CODES =
     INSTANCE_INVARIANT_FAILED = "INSTANCE_INVARIANT_FAILED",
     SCENE_APPLY_FAILED = "SCENE_APPLY_FAILED",
     SCENE_RESET_FAILED = "SCENE_RESET_FAILED",
+    RECOVERY_FAILED = "RECOVERY_FAILED",
 }
 
 local function IsInteger(value)
@@ -60,6 +62,7 @@ local function AttachMethods(manager)
     manager.AttachPlayer = InstanceManager.AttachPlayer
     manager.MarkDisconnected = InstanceManager.MarkDisconnected
     manager.RemoveParticipant = InstanceManager.RemoveParticipant
+    manager.RecoverOnRestart = InstanceManager.RecoverOnRestart
     manager.ResolveInstance = InstanceManager.ResolveInstance
     manager.ResolveRootOwner = InstanceManager.ResolveRootOwner
     manager.CanInteract = InstanceManager.CanInteract
@@ -74,6 +77,42 @@ local function GetNow(self)
         return GetTime()
     end
     return 0
+end
+
+local function EnqueueRestore(self, transaction, participant)
+    if type(self.restore_enqueue_fn) ~= "function" then
+        return false, InstanceManager.ERROR_CODES.RECOVERY_FAILED
+    end
+    local ok, queued, code = pcall(
+        self.restore_enqueue_fn,
+        transaction,
+        participant
+    )
+    if not ok or queued == false then
+        return false, code or InstanceManager.ERROR_CODES.RECOVERY_FAILED
+    end
+    return true, code
+end
+
+local function QueueInstanceSandboxTransactions(self, instance)
+    local sandbox = instance ~= nil and instance:GetService("player_sandbox") or nil
+    if sandbox == nil or type(sandbox.ListTransactions) ~= "function" then
+        return true
+    end
+    local transactions = sandbox:ListTransactions()
+    for index = 1, #transactions do
+        local transaction = transactions[index]
+        if transaction ~= nil
+            and transaction.state ~= "COMMITTED"
+            and transaction.state ~= "CAPTURE_FAILED" then
+            local participant = instance:GetParticipant(transaction.userid)
+            local queued, queue_code = EnqueueRestore(self, transaction, participant)
+            if not queued then
+                return false, queue_code
+            end
+        end
+    end
+    return true
 end
 
 function InstanceManager.New(options)
@@ -107,11 +146,15 @@ function InstanceManager.New(options)
         common_service_registry = options.common_service_registry
             or CommonServiceRegistry.New(),
         profile_registry = options.profile_registry,
+        spectator_service = options.spectator_service,
         instances_by_id = {},
         instance_order = {},
         destroyed_ids = {},
         restart_aborted_count = 0,
+        pending_recovery = {},
+        recovery_failures = {},
         participants_by_userid = {},
+        restore_enqueue_fn = options.restore_enqueue_fn,
     }
     manager.rule_policy = RulePolicy.New(
     {
@@ -249,6 +292,21 @@ function InstanceManager.AttachPlayer(self, instance_id, userid, player)
             return false, sandbox_code or "PLAYER_SANDBOX_ENTER_FAILED"
         end
     end
+    local death_policy = instance:GetDeathPolicy()
+    if death_policy ~= nil and type(death_policy.OnPlayerAttached) == "function" then
+        local attached_death, death_code = death_policy:OnPlayerAttached(participant, player)
+        if not attached_death then
+            if sandbox ~= nil then
+                sandbox:RestoreOriginal(participant, player, "death_policy_attach_failed")
+            end
+            participant:MarkDisconnected(
+                "death_policy_attach_failed",
+                instance.generation,
+                GetNow(self)
+            )
+            return false, death_code or "DEATH_POLICY_ATTACH_FAILED"
+        end
+    end
     return true
 end
 
@@ -276,6 +334,16 @@ function InstanceManager.RemoveParticipant(self, instance_id, userid, reason)
         return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
     end
     local restore_pending_code = nil
+    local death_policy = instance:GetDeathPolicy()
+    if death_policy ~= nil and type(death_policy.OnParticipantLeave) == "function" then
+        local death_clean, death_code = death_policy:OnParticipantLeave(
+            participant,
+            reason or "participant_removed"
+        )
+        if not death_clean then
+            restore_pending_code = death_code
+        end
+    end
     local sandbox = instance:GetService("player_sandbox")
     if sandbox ~= nil then
         local restored, restore_code = sandbox:RestoreOriginal(
@@ -286,7 +354,12 @@ function InstanceManager.RemoveParticipant(self, instance_id, userid, reason)
         if not restored then
             -- 玩家恢复失败不能阻塞其他 Participant 的索引和 Instance 清理；
             -- SandboxService 会保留同一 transaction 供 inspect/retry。
-            restore_pending_code = restore_code
+            restore_pending_code = restore_pending_code or restore_code
+            local transaction = sandbox:GetTransaction(participant)
+            local queued, queue_code = EnqueueRestore(self, transaction, participant)
+            if not queued then
+                restore_pending_code = restore_pending_code or queue_code
+            end
         end
     end
     local left, left_code = participant:MarkLeft(
@@ -365,7 +438,7 @@ local function RemoveInstanceParticipants(self, instance)
     end
 end
 
-function InstanceManager.Create(self, mode_id, userids)
+function InstanceManager.Create(self, mode_id, userids, options)
     if type(self.zone_manager) ~= "table"
         or type(self.mode_registry) ~= "table" then
         return nil, InstanceManager.ERROR_CODES.CORE_NOT_READY
@@ -377,6 +450,7 @@ function InstanceManager.Create(self, mode_id, userids)
     if requested_userids == nil then
         return nil, userids_code
     end
+    options = type(options) == "table" and options or {}
     for index = 1, #requested_userids do
         if self.participants_by_userid[requested_userids[index]] ~= nil then
             return nil, InstanceManager.ERROR_CODES.PARTICIPANT_ALREADY_ACTIVE
@@ -409,6 +483,7 @@ function InstanceManager.Create(self, mode_id, userids)
             owner = self.world,
             participant_manager = self,
             rule_policy = self.rule_policy,
+            death_mode = options.death_mode,
         }
     )
     if instance == nil then
@@ -444,6 +519,7 @@ function InstanceManager.Create(self, mode_id, userids)
             RemoveInstanceParticipants(self, instance)
             self.instances_by_id[instance_id] = nil
             RemoveFromOrder(self, instance_id)
+            instance:CloseDeathPolicy("participant_create_failed")
             instance:CloseServices("participant_create_failed")
             instance:CloseGroups("participant_create_failed")
             instance.root_scope:Close("participant_create_failed")
@@ -458,6 +534,7 @@ function InstanceManager.Create(self, mode_id, userids)
             RemoveInstanceParticipants(self, instance)
             self.instances_by_id[instance_id] = nil
             RemoveFromOrder(self, instance_id)
+            instance:CloseDeathPolicy("scene_attach_failed")
             instance:CloseServices("scene_attach_failed")
             instance:CloseGroups("scene_attach_failed")
             instance.root_scope:Close("scene_attach_failed")
@@ -471,6 +548,7 @@ function InstanceManager.Create(self, mode_id, userids)
         RemoveInstanceParticipants(self, instance)
         self.instances_by_id[instance_id] = nil
         RemoveFromOrder(self, instance_id)
+        instance:CloseDeathPolicy("prepare_failed")
         instance:CloseServices("prepare_failed")
         instance:CloseGroups("prepare_failed")
         if self.scene_service ~= nil then
@@ -678,6 +756,22 @@ function InstanceManager.Destroy(self, instance_id, reason)
         return false, InstanceManager.ERROR_CODES.INSTANCE_NOT_FOUND
     end
 
+    if self.spectator_service ~= nil
+        and type(self.spectator_service.OnInstanceDestroy) == "function" then
+        local spectators_clean, spectator_code = self.spectator_service:OnInstanceDestroy(
+            instance_id,
+            reason or "destroy"
+        )
+        if not spectators_clean then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "spectator_cleanup_failed:" .. tostring(spectator_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+    end
+
     local destroying, destroying_code = instance:BeginDestroy(reason or "destroy")
     if not destroying then
         self.zone_manager:Quarantine(
@@ -688,13 +782,35 @@ function InstanceManager.Destroy(self, instance_id, reason)
         return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
     end
 
+    local death_policy_closed, death_policy_code = instance:CloseDeathPolicy(
+        reason or "destroy"
+    )
+    if not death_policy_closed then
+        self.zone_manager:Quarantine(
+            instance.zone_id,
+            instance.instance_id,
+            "death_policy_cleanup_failed:" .. tostring(death_policy_code)
+        )
+        return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+    end
+
     if self.scene_service ~= nil then
         local services_closed, services_code = instance:CloseServices(reason or "destroy")
         if not services_closed then
+            QueueInstanceSandboxTransactions(self, instance)
             self.zone_manager:Quarantine(
                 instance.zone_id,
                 instance.instance_id,
                 "service_cleanup_failed:" .. tostring(services_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+        local queued, queue_code = QueueInstanceSandboxTransactions(self, instance)
+        if not queued then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "restore_queue_failed:" .. tostring(queue_code)
             )
             return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
         end
@@ -719,10 +835,20 @@ function InstanceManager.Destroy(self, instance_id, reason)
     else
         local services_closed, services_code = instance:CloseServices(reason or "destroy")
         if not services_closed then
+            QueueInstanceSandboxTransactions(self, instance)
             self.zone_manager:Quarantine(
                 instance.zone_id,
                 instance.instance_id,
                 "service_cleanup_failed:" .. tostring(services_code)
+            )
+            return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+        local queued, queue_code = QueueInstanceSandboxTransactions(self, instance)
+        if not queued then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "restore_queue_failed:" .. tostring(queue_code)
             )
             return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
         end
@@ -789,6 +915,8 @@ function InstanceManager.GetSummary(self)
         instance_count = 0,
         by_lifecycle = {},
         restart_aborted_count = self.restart_aborted_count,
+        recovery_pending_count = #(self.pending_recovery or {}),
+        recovery_failure_count = #(self.recovery_failures or {}),
     }
     for index = 1, #self.instance_order do
         local instance = self.instances_by_id[self.instance_order[index]]
@@ -816,6 +944,7 @@ function InstanceManager.GetSnapshot(self)
         next_sequence = self.next_sequence,
         restart_policy = self.restart_policy,
         instances = instances,
+        recovery_failures = Schema.CopyPure(self.recovery_failures) or {},
     }
 end
 
@@ -834,17 +963,146 @@ function InstanceManager.OnLoad(self, data)
         return false, InstanceManager.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT
     end
 
+    local copied_instances, copy_code = Schema.CopyPure(data.instances or {})
+    if type(copied_instances) ~= "table" then
+        return false, copy_code or InstanceManager.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT
+    end
+
     if data.next_sequence > self.next_sequence then
         self.next_sequence = data.next_sequence
     end
 
     -- 当前仍采用 ABORT_ON_RESTART；Participant 索引不从活动实例快照恢复，
-    -- 避免把已经断开的连接伪造为活动玩家。
+    -- 避免把已经断开的连接伪造为活动玩家。实际清场在 OnPostInit 之后执行。
     self.participants_by_userid = {}
     self.rule_policy.participant_index = self.participants_by_userid
-    -- WP2/WP4 不恢复正在运行的玩法；没有地形和玩家资源需要回收，新的 Zone 池从 FREE 开始。
-    self.restart_aborted_count = data.instances ~= nil and #data.instances or 0
+    self.pending_recovery = copied_instances
+    self.recovery_failures = type(data.recovery_failures) == "table"
+        and Schema.CopyPure(data.recovery_failures)
+        or {}
+    self.restart_aborted_count = #self.pending_recovery
     return true, self.restart_aborted_count > 0 and "ACTIVE_INSTANCES_ABORTED" or nil
+end
+
+local function QueueSavedSandboxTransactions(self, saved_instance)
+    local services = saved_instance.services
+    local sandbox = type(services) == "table" and services.player_sandbox or nil
+    local transactions = type(sandbox) == "table" and sandbox.transactions or nil
+    if transactions == nil then
+        return true
+    end
+    if type(transactions) ~= "table" then
+        return false, InstanceManager.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT
+    end
+
+    local participants = {}
+    for index = 1, #(saved_instance.participants or {}) do
+        local participant = saved_instance.participants[index]
+        if type(participant) == "table" and IsNonEmptyString(participant.userid) then
+            participants[participant.userid] = participant
+        end
+    end
+    for index = 1, #transactions do
+        local transaction = transactions[index]
+        if type(transaction) ~= "table" then
+            return false, InstanceManager.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT
+        end
+        if transaction.state ~= "COMMITTED"
+            and transaction.state ~= "CAPTURE_FAILED" then
+            local queued, queue_code = EnqueueRestore(
+                self,
+                transaction,
+                participants[transaction.userid]
+            )
+            if not queued then
+                return false, queue_code
+            end
+        end
+    end
+    return true
+end
+
+function InstanceManager.RecoverOnRestart(self)
+    local summary =
+    {
+        aborted = #(self.pending_recovery or {}),
+        recovered = 0,
+        quarantined = 0,
+        restore_transactions = 0,
+    }
+    local pending = self.pending_recovery or {}
+    self.recovery_failures = self.recovery_failures or {}
+
+    for index = 1, #pending do
+        local saved = pending[index]
+        local instance_id = type(saved) == "table" and saved.instance_id or nil
+        local zone_id = type(saved) == "table" and saved.zone_id or nil
+        local zone = zone_id ~= nil and self.zone_manager:Get(zone_id) or nil
+        local failure_code = nil
+
+        if type(saved) ~= "table"
+            or not IsNonEmptyString(instance_id)
+            or not IsNonEmptyString(zone_id)
+            or zone == nil then
+            failure_code = InstanceManager.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT
+        else
+            local queued, queue_code = QueueSavedSandboxTransactions(self, saved)
+            if not queued then
+                failure_code = queue_code or InstanceManager.ERROR_CODES.RECOVERY_FAILED
+            end
+            if failure_code == nil then
+                if zone:IsQuarantined() then
+                    failure_code = "ZONE_QUARANTINED"
+                elseif self.scene_service == nil
+                    or type(self.scene_service.RecoverSnapshot) ~= "function" then
+                    failure_code = InstanceManager.ERROR_CODES.RECOVERY_FAILED
+                else
+                    local cleaned, clean_code = self.scene_service:RecoverSnapshot(
+                        saved,
+                        zone,
+                        "restart_recovery"
+                    )
+                    if not cleaned then
+                        failure_code = clean_code or InstanceManager.ERROR_CODES.RECOVERY_FAILED
+                    else
+                        local released, release_code = self.zone_manager:ReleaseRecovered(
+                            zone_id,
+                            instance_id
+                        )
+                        if not released then
+                            failure_code = release_code
+                                or InstanceManager.ERROR_CODES.RECOVERY_FAILED
+                        end
+                    end
+                end
+            end
+        end
+
+        if failure_code == nil then
+            summary.recovered = summary.recovered + 1
+        else
+            summary.quarantined = summary.quarantined + 1
+            if zone ~= nil and self.zone_manager ~= nil
+                and type(self.zone_manager.QuarantineRecovered) == "function" then
+                self.zone_manager:QuarantineRecovered(
+                    zone_id,
+                    instance_id,
+                    "restart_recovery_failed:" .. tostring(failure_code)
+                )
+            end
+            table.insert(
+                self.recovery_failures,
+                {
+                    instance_id = instance_id,
+                    zone_id = zone_id,
+                    code = failure_code,
+                }
+            )
+        end
+    end
+
+    self.pending_recovery = {}
+    return true, summary
 end
 
 function InstanceManager.Validate(self)
@@ -919,6 +1177,14 @@ function InstanceManager.Validate(self)
                 return false, InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
             end
         end
+        if instance.death_policy ~= nil
+            and type(instance.death_policy.Validate) == "function" then
+            local death_valid, death_code = instance.death_policy:Validate()
+            if not death_valid then
+                return false, death_code
+                    or InstanceManager.ERROR_CODES.INSTANCE_INVARIANT_FAILED
+            end
+        end
         for service_index = 1, #(instance.service_order or {}) do
             local service_id = instance.service_order[service_index]
             local service = instance.services[service_id]
@@ -977,10 +1243,11 @@ function InstanceManager.GetDebugLines(self)
             table.insert(
                 lines,
                 string.format(
-                    "instance_id=%s mode_id=%s mode_version=%s zone_id=%s zone_state=%s lifecycle=%s generation=%d scene_revision=%d entities=%d",
+                    "instance_id=%s mode_id=%s mode_version=%s death_mode=%s zone_id=%s zone_state=%s lifecycle=%s generation=%d scene_revision=%d entities=%d",
                     tostring(instance.instance_id),
                     tostring(instance.mode_id),
                     tostring(instance.mode_version),
+                    tostring(instance.death_policy ~= nil and instance.death_policy.mode or nil),
                     tostring(instance.zone_id),
                     tostring(zone ~= nil and zone.state or nil),
                     tostring(instance.lifecycle_state),

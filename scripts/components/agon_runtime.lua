@@ -2,6 +2,7 @@ local Diagnostics = require("agon/debug/diagnostics")
 local WorldLayout = require("agon/config/world_layout")
 local LayoutService = require("agon/world/layout_service")
 local LobbyService = require("agon/world/lobby_service")
+local SpectatorService = require("agon/player/spectator_service")
 local ZoneManager = require("agon/core/zone_manager")
 local InstanceManager = require("agon/core/instance_manager")
 local ModeRegistry = require("agon/modes/mode_registry")
@@ -12,10 +13,16 @@ local SceneService = require("agon/world/scene_service")
 local AudienceStateChannel = require("agon/net/audience_state_channel")
 local Rpc = require("agon/net/rpc")
 local Classified = require("agon/net/classified")
+local PersistenceSchema = require("agon/persistence/schema")
+local PersistenceMigrations = require("agon/persistence/migrations")
+local RestoreQueue = require("agon/player/restore_queue")
+local BackendAdapter = require("agon/backend/backend_adapter")
 local Wp4Diagnostics = require("agon/modes/test_mode/wp4_diagnostics")
 local Wp5Diagnostics = require("agon/modes/test_mode/wp5_diagnostics")
 local Wp6Diagnostics = require("agon/modes/test_mode/wp6_diagnostics")
 local Wp7Diagnostics = require("agon/modes/test_mode/wp7_diagnostics")
+local Wp8Diagnostics = require("agon/modes/test_mode/wp8_diagnostics")
+local Wp9Diagnostics = require("agon/modes/test_mode/wp9_diagnostics")
 
 local function IsNonEmptyString(value)
     return type(value) == "string" and value ~= ""
@@ -59,6 +66,62 @@ local function AddLayoutContext(runtime, context)
     return context
 end
 
+local function IsInsideBounds(point, bounds)
+    return type(point) == "table"
+        and type(bounds) == "table"
+        and type(bounds.min) == "table"
+        and type(bounds.max) == "table"
+        and point.x >= bounds.min.x
+        and point.x <= bounds.max.x
+        and point.z >= bounds.min.z
+        and point.z <= bounds.max.z
+end
+
+local function GetPlayerPosition(player)
+    if player == nil or player.Transform == nil
+        or type(player.Transform.GetWorldPosition) ~= "function" then
+        return nil
+    end
+    local ok, x, y, z = pcall(player.Transform.GetWorldPosition, player.Transform)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+        return nil
+    end
+    return { x = x, y = y, z = z }
+end
+
+local function MakeRecoverySummary()
+    return
+    {
+        aborted = 0,
+        recovered = 0,
+        quarantined = 0,
+        restore_transactions = 0,
+    }
+end
+
+local function NormalizeRecoverySummary(value)
+    if value == nil then
+        return MakeRecoverySummary()
+    end
+    local copied, copy_code = PersistenceSchema.CopyPure(value)
+    if type(copied) ~= "table" then
+        return nil, copy_code or Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+    end
+
+    local normalized = MakeRecoverySummary()
+    for field in pairs(normalized) do
+        if copied[field] ~= nil then
+            if type(copied[field]) ~= "number"
+                or copied[field] ~= math.floor(copied[field])
+                or copied[field] < 0 then
+                return nil, Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+            end
+            normalized[field] = copied[field]
+        end
+    end
+    return normalized
+end
+
 local AgonRuntime = Class(function(self, inst)
     self.inst = inst
     -- schema_version 标识快照格式；WP0 只接受当前版本，便于后续演进时拒绝未知数据。
@@ -79,9 +142,22 @@ local AgonRuntime = Class(function(self, inst)
     self.common_service_registry = nil
     self.entity_profile_registry = nil
     self.scene_service = nil
+    self.lobby_service = nil
+    self.spectator_service = nil
     self.instance_manager = nil
     self.audience_state_channel = nil
     self.rpc = nil
+    self.restore_queue = nil
+    self.backend_adapter = nil
+    self.recovery_summary =
+    {
+        aborted = 0,
+        recovered = 0,
+        quarantined = 0,
+        restore_transactions = 0,
+    }
+    self.saved_restore_queue = nil
+    self.saved_backend = nil
     self.player_classifieds = {}
     self.player_classified_players = {}
     self.player_lifecycle_listeners_registered = false
@@ -96,6 +172,11 @@ end)
 
 function AgonRuntime:OnSave()
     local snapshot = Diagnostics.MakeSnapshot(self)
+    snapshot.persistence =
+    {
+        schema_version = PersistenceSchema.SCHEMA_VERSION,
+        restart_policy = PersistenceSchema.RESTART_POLICY,
+    }
     snapshot.layout_version = self.layout_version
     snapshot.layout_status = self.layout_status
     if self.layout ~= nil then
@@ -119,6 +200,85 @@ function AgonRuntime:OnSave()
     elseif self.saved_core ~= nil then
         snapshot.core = LayoutService.CopyPureData(self.saved_core)
     end
+    snapshot.restore_queue = self.restore_queue ~= nil
+        and self.restore_queue:GetSnapshot()
+        or PersistenceSchema.CopyPure(self.saved_restore_queue)
+    snapshot.backend = self.backend_adapter ~= nil
+        and self.backend_adapter:GetSnapshot()
+        or PersistenceSchema.CopyPure(self.saved_backend)
+    snapshot.recovery = PersistenceSchema.CopyPure(self.recovery_summary)
+
+    local valid, valid_code = PersistenceSchema.ValidateSnapshot(snapshot)
+    if not valid then
+        Diagnostics.Record(
+            self.diagnostics,
+            Diagnostics.ERROR_CODES.PERSISTENCE_NON_SERIALIZABLE,
+            tostring(valid_code)
+        )
+        Diagnostics.Log(
+            Diagnostics.ERROR_CODES.PERSISTENCE_NON_SERIALIZABLE,
+            {
+                shard_id = self.shard_id,
+                operation = "runtime_save",
+                boot_generation = self.boot_generation,
+            },
+            "Runtime snapshot rejected by pure-data schema: " .. tostring(valid_code)
+        )
+        -- 即使某个可选扩展字段异常，也返回官方存档接口可接受的安全最小快照。
+        local safe = Diagnostics.MakeSnapshot(self)
+        safe.persistence = PersistenceSchema.CopyPure(snapshot.persistence)
+        safe.layout_version = self.layout_version
+        safe.layout_status = self.layout_status
+        if self.layout ~= nil then
+            safe.layout = LayoutService.CopyPureData(self.layout)
+        end
+
+        -- 尽量保留恢复所需的 core 子快照；单个可选字段异常时不能把活动
+        -- Instance/Zone 整体丢掉，否则下一次启动无法执行 ABORT_ON_RESTART。
+        local core_source = snapshot.core or self.saved_core
+        if type(core_source) == "table" then
+            local safe_core =
+            {
+                schema_version = core_source.schema_version or 1,
+                core_status = core_source.core_status or self.core_status,
+            }
+            for _, field in ipairs(
+                {
+                    "zone_manager",
+                    "instance_manager",
+                    "entity_profile_registry",
+                    "audience_state_channel",
+                    "rpc",
+                }
+            ) do
+                local copied_field = PersistenceSchema.CopyPure(core_source[field])
+                if copied_field ~= nil then
+                    safe_core[field] = copied_field
+                end
+            end
+            safe.core = PersistenceSchema.CopyPure(safe_core)
+        end
+
+        local restore_source = self.restore_queue ~= nil
+            and self.restore_queue:GetSnapshot()
+            or self.saved_restore_queue
+        local copied_restore = PersistenceSchema.CopyPure(restore_source)
+        if copied_restore ~= nil then
+            safe.restore_queue = copied_restore
+        end
+        local backend_source = self.backend_adapter ~= nil
+            and self.backend_adapter:GetSnapshot()
+            or self.saved_backend
+        local copied_backend = PersistenceSchema.CopyPure(backend_source)
+        if copied_backend ~= nil then
+            safe.backend = copied_backend
+        end
+        local copied_recovery = PersistenceSchema.CopyPure(self.recovery_summary)
+        if copied_recovery ~= nil then
+            safe.recovery = copied_recovery
+        end
+        return safe
+    end
     return snapshot
 end
 
@@ -127,12 +287,23 @@ function AgonRuntime:OnLoad(data)
         return
     end
 
-    -- 只恢复经过校验的纯数据快照；拒绝的数据不会污染当前运行态，并会记录诊断。
-    local valid, code = Diagnostics.ValidateSnapshot(data)
+    -- 先迁移并严格复制；拒绝的数据不会污染当前运行态，并会记录诊断。
+    local migrated, migration_code = PersistenceMigrations.Migrate(data)
+    if migrated == nil then
+        RecordLoadError(self, migration_code)
+        return
+    end
+    local valid, code = Diagnostics.ValidateSnapshot(migrated)
     if not valid then
         RecordLoadError(self, code)
         return
     end
+    local persistence_valid, persistence_code = PersistenceSchema.ValidateSnapshot(migrated)
+    if not persistence_valid then
+        RecordLoadError(self, persistence_code)
+        return
+    end
+    data = migrated
 
     self.schema_version = data.schema_version
     self.shard_id = data.shard_id
@@ -181,7 +352,48 @@ function AgonRuntime:OnLoad(data)
             RecordLoadError(self, Diagnostics.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT)
             return
         end
-        self.saved_core = LayoutService.CopyPureData(data.core)
+        local copied_core, core_code = PersistenceSchema.CopyPure(data.core)
+        if copied_core == nil then
+            RecordLoadError(
+                self,
+                core_code or Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+            )
+            return
+        end
+        self.saved_core = copied_core
+    end
+    if data.restore_queue ~= nil then
+        local copied_restore, restore_code = PersistenceSchema.CopyPure(data.restore_queue)
+        if copied_restore == nil then
+            RecordLoadError(
+                self,
+                restore_code or Diagnostics.ERROR_CODES.RESTORE_QUEUE_INVALID
+            )
+            return
+        end
+        self.saved_restore_queue = copied_restore
+    end
+    if data.backend ~= nil then
+        local copied_backend, backend_code = PersistenceSchema.CopyPure(data.backend)
+        if copied_backend == nil then
+            RecordLoadError(
+                self,
+                backend_code or Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+            )
+            return
+        end
+        self.saved_backend = copied_backend
+    end
+    if data.recovery ~= nil then
+        local recovery, recovery_code = NormalizeRecoverySummary(data.recovery)
+        if recovery == nil then
+            RecordLoadError(
+                self,
+                recovery_code or Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+            )
+            return
+        end
+        self.recovery_summary = recovery
     end
 end
 
@@ -208,9 +420,13 @@ function AgonRuntime:FailCore(code, message, context)
     self.common_service_registry = nil
     self.entity_profile_registry = nil
     self.scene_service = nil
+    self.lobby_service = nil
+    self.spectator_service = nil
     self.instance_manager = nil
     self.audience_state_channel = nil
     self.rpc = nil
+    self.restore_queue = nil
+    self.backend_adapter = nil
     Diagnostics.Record(self.diagnostics, code, message)
     Diagnostics.Log(code, AddLayoutContext(self, context), message)
     return false
@@ -281,6 +497,49 @@ function AgonRuntime:InitializeCore()
         )
     end
 
+    local restore_queue = RestoreQueue.New({ now_fn = function()
+        return self:Now()
+    end })
+    if restore_queue == nil then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "RestoreQueue initialization failed"
+        )
+    end
+    if self.saved_restore_queue ~= nil then
+        local queue_loaded, queue_code = restore_queue:OnLoad(self.saved_restore_queue)
+        if not queue_loaded then
+            return self:FailCore(
+                Diagnostics.ERROR_CODES.RESTORE_QUEUE_INVALID,
+                "saved restore queue rejected: " .. tostring(queue_code),
+                { operation = "core_load" }
+            )
+        end
+    end
+
+    local backend_adapter = BackendAdapter.New(
+    {
+        now_fn = function()
+            return self:Now()
+        end,
+    })
+    if backend_adapter == nil then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "BackendAdapter initialization failed"
+        )
+    end
+    if self.saved_backend ~= nil then
+        local backend_loaded, backend_code = backend_adapter:OnLoad(self.saved_backend)
+        if not backend_loaded then
+            return self:FailCore(
+                Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT,
+                "saved backend state rejected: " .. tostring(backend_code),
+                { operation = "core_load" }
+            )
+        end
+    end
+
     local scene_service, scene_code = SceneService.New(
     {
         world = self.inst,
@@ -295,6 +554,20 @@ function AgonRuntime:InitializeCore()
         )
     end
 
+    local lobby_service, lobby_code = LobbyService.New(
+    {
+        world = self.inst,
+        map = GetMap(self),
+        layout = self.layout,
+        spawn_points = WorldLayout.lobby.spawn_and_return_points,
+    })
+    if lobby_service == nil then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "LobbyService initialization failed: " .. tostring(lobby_code)
+        )
+    end
+
     local instance_manager, instance_code = InstanceManager.New(
     {
         shard_id = self.shard_id,
@@ -304,6 +577,9 @@ function AgonRuntime:InitializeCore()
         world = self.inst,
         common_service_registry = common_service_registry,
         profile_registry = entity_profile_registry,
+        restore_enqueue_fn = function(transaction, participant)
+            return restore_queue:Enqueue(transaction, participant)
+        end,
     })
     if instance_manager == nil then
         return self:FailCore(
@@ -312,10 +588,32 @@ function AgonRuntime:InitializeCore()
         )
     end
 
+    local spectator_service, spectator_code = SpectatorService.New(
+    {
+        runtime = self,
+        world = self.inst,
+        layout = self.layout,
+        instance_manager = instance_manager,
+        scene_service = scene_service,
+        lobby_service = lobby_service,
+    })
+    if spectator_service == nil then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+            "SpectatorService initialization failed: " .. tostring(spectator_code)
+        )
+    end
+    instance_manager.spectator_service = spectator_service
+
     local audience_state_channel = AudienceStateChannel.New(
     {
         resolve_instance_for_userid = function(userid)
-            return instance_manager:GetParticipantInstanceId(userid)
+            local participant_instance_id = instance_manager:GetParticipantInstanceId(userid)
+            if participant_instance_id ~= nil then
+                return participant_instance_id
+            end
+            local session = spectator_service:GetSession(userid)
+            return session ~= nil and session.instance_id or nil
         end,
         resolve_groups_for_userid = function(userid)
             local participant = instance_manager:GetParticipant(userid)
@@ -324,12 +622,20 @@ function AgonRuntime:InitializeCore()
             end
             return participant:GetGroupIds()
         end,
+        resolve_spectating_instance_for_userid = function(userid)
+            local session = spectator_service:GetSession(userid)
+            return session ~= nil and session.instance_id or nil
+        end,
     })
     local rpc, rpc_code = Rpc.New(
     {
         runtime = self,
         instance_manager = instance_manager,
         rule_policy = instance_manager.rule_policy,
+        spectator_service = spectator_service,
+        dispatch_fn = function(context, request)
+            return self:DispatchRpc(context, request)
+        end,
     })
     if audience_state_channel == nil or rpc == nil then
         return self:FailCore(
@@ -340,6 +646,14 @@ function AgonRuntime:InitializeCore()
     instance_manager.audience_state_channel = audience_state_channel
 
     if self.saved_core ~= nil then
+        local zones_loaded, zones_code = zone_manager:OnLoad(self.saved_core.zone_manager)
+        if not zones_loaded then
+            return self:FailCore(
+                Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+                "saved Zone state rejected: " .. tostring(zones_code),
+                { operation = "core_load" }
+            )
+        end
         local loaded, load_code = instance_manager:OnLoad(self.saved_core.instance_manager)
         if not loaded then
             return self:FailCore(
@@ -355,11 +669,63 @@ function AgonRuntime:InitializeCore()
     self.common_service_registry = common_service_registry
     self.entity_profile_registry = entity_profile_registry
     self.scene_service = scene_service
+    self.lobby_service = lobby_service
+    self.spectator_service = spectator_service
     self.instance_manager = instance_manager
     self.audience_state_channel = audience_state_channel
     self.rpc = rpc
+    self.restore_queue = restore_queue
+    self.backend_adapter = backend_adapter
+
+    if self.saved_core ~= nil then
+        local audience_loaded, audience_code = audience_state_channel:OnLoad(
+            self.saved_core.audience_state_channel
+        )
+        if not audience_loaded then
+            return self:FailCore(
+                Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+                "saved audience state rejected: " .. tostring(audience_code),
+                { operation = "core_load" }
+            )
+        end
+        local rpc_loaded, rpc_code = rpc:OnLoad(self.saved_core.rpc)
+        if not rpc_loaded then
+            return self:FailCore(
+                Diagnostics.ERROR_CODES.CORE_INIT_FAILED,
+                "saved RPC state rejected: " .. tostring(rpc_code),
+                { operation = "core_load" }
+            )
+        end
+    end
     self.core_status = "READY"
     self.core_failure_code = nil
+
+    self:PrepareRecoveryPlayers()
+    local recovered, recovery_summary = instance_manager:RecoverOnRestart()
+    if not recovered then
+        return self:FailCore(
+            Diagnostics.ERROR_CODES.RECOVERY_FAILED,
+            "restart recovery failed: " .. tostring(recovery_summary),
+            { operation = "restart_recovery" }
+        )
+    end
+    self.recovery_summary = recovery_summary or self.recovery_summary
+    Diagnostics.Log(
+        self.recovery_summary.quarantined > 0
+            and Diagnostics.RESULTS.RECOVERY_PARTIAL
+            or Diagnostics.RESULTS.RECOVERY_COMPLETE,
+        {
+            shard_id = self.shard_id,
+            operation = "restart_recovery",
+            core_status = self.core_status,
+            aborted_instance_count = self.recovery_summary.aborted,
+            quarantined_zone_count = self.recovery_summary.quarantined,
+            pending_restore_count = restore_queue:GetPendingCount(),
+        },
+        self.recovery_summary.quarantined > 0
+            and "restart recovery completed with quarantined zones"
+            or "restart recovery completed"
+    )
     self:InitializePlayerTracking()
 
     local zone_summary = self.zone_manager:GetSummary()
@@ -621,6 +987,64 @@ function AgonRuntime:IsReady()
     return self.layout_status == "READY" and self.core_status == "READY"
 end
 
+function AgonRuntime:Now()
+    if type(GetTime) == "function" then
+        return GetTime()
+    end
+    return 0
+end
+
+function AgonRuntime:PrepareRecoveryPlayers()
+    if self.instance_manager == nil or self.scene_service == nil
+        or self.lobby_service == nil or type(AllPlayers) ~= "table" then
+        return true
+    end
+    local terrain = self.scene_service.terrain
+    if terrain == nil or type(terrain.GetTileAtWorld) ~= "function" then
+        return false
+    end
+    local pending = self.instance_manager.pending_recovery or {}
+    for _, player in ipairs(AllPlayers) do
+        local position = GetPlayerPosition(player)
+        if position ~= nil then
+            local tile_x, tile_z = terrain:GetTileAtWorld(
+                position.x,
+                position.y,
+                position.z
+            )
+            if tile_x ~= nil then
+                for index = 1, #pending do
+                    local saved = pending[index]
+                    local zone = type(saved) == "table"
+                        and self.zone_manager:Get(saved.zone_id)
+                        or nil
+                    if zone ~= nil and IsInsideBounds(
+                        { x = tile_x, z = tile_z },
+                        zone.hard_bounds
+                    ) then
+                        self.lobby_service:OnPlayerRemoved(player)
+                        local entered, enter_code = self.lobby_service:Enter(player)
+                        if entered == nil then
+                            Diagnostics.Log(
+                                Diagnostics.ERROR_CODES.RECOVERY_FAILED,
+                                {
+                                    shard_id = self.shard_id,
+                                    operation = "restart_recovery_player_move",
+                                    userid = player.userid,
+                                    zone_id = zone.zone_id,
+                                },
+                                "player could not leave recovered Zone: " .. tostring(enter_code)
+                            )
+                        end
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return true
+end
+
 function AgonRuntime:RefreshPlayerClassified(player)
     if player == nil or not IsNonEmptyString(player.userid)
         or self.instance_manager == nil
@@ -637,19 +1061,32 @@ function AgonRuntime:RefreshPlayerClassified(player)
     local instance = participant ~= nil
         and self.instance_manager:Get(participant.instance_id)
         or nil
+    local spectator_state = self.spectator_service ~= nil
+        and self.spectator_service:GetClientState(player.userid)
+        or nil
     if participant ~= nil and instance ~= nil then
         Classified.SetParticipant(classified, participant, instance)
     else
         Classified.ClearParticipant(classified)
     end
 
+    local audience_instance_id = instance ~= nil and instance.instance_id or nil
+    if spectator_state ~= nil then
+        audience_instance_id = spectator_state.instance_id
+    end
     local payload = self.audience_state_channel:ReadPayload(
         player.userid,
         {
-            instance_id = instance ~= nil and instance.instance_id or nil,
+            instance_id = audience_instance_id,
+            spectating_instance_id = spectator_state ~= nil
+                and spectator_state.instance_id
+                or nil,
         }
     )
     Classified.SetAudiencePayload(classified, payload or {})
+    if type(Classified.SetSpectatorState) == "function" then
+        Classified.SetSpectatorState(classified, spectator_state or {})
+    end
     return true
 end
 
@@ -680,8 +1117,32 @@ function AgonRuntime:OnPlayerAdded(player)
     self.player_classifieds[player.userid] = classified
     self.player_classified_players[player.userid] = player
 
+    local restore_entry = self.restore_queue ~= nil
+        and self.restore_queue:Get(player.userid)
+        or nil
+    if restore_entry ~= nil
+        and restore_entry.state ~= RestoreQueue.STATES.RESTORED then
+        local restored, restore_code = self.restore_queue:TryRestore(player)
+        Diagnostics.Log(
+            restored and Diagnostics.RESULTS.RESTORE_COMPLETE or restore_code,
+            {
+                shard_id = self.shard_id,
+                operation = "player_reconnect_restore",
+                userid = player.userid,
+                transaction_id = restore_entry.transaction_id,
+                pending_restore_count = self.restore_queue:GetPendingCount(),
+            },
+            restored and "player restore completed"
+                or "player restore remains guarded: " .. tostring(restore_code)
+        )
+    end
+
     local participant = self.instance_manager:GetParticipant(player.userid)
     if participant ~= nil then
+        if self.lobby_service ~= nil
+            and self.lobby_service:GetSession(player.userid) ~= nil then
+            self.lobby_service:OnPlayerRemoved(player)
+        end
         local attached, attach_code = self.instance_manager:AttachPlayer(
             participant.instance_id,
             player.userid,
@@ -699,6 +1160,19 @@ function AgonRuntime:OnPlayerAdded(player)
                 "Participant player attachment failed"
             )
         end
+    elseif self.lobby_service ~= nil then
+        local lobby_session, lobby_code = self.lobby_service:Enter(player)
+        if lobby_session == nil then
+            Diagnostics.Log(
+                lobby_code,
+                {
+                    shard_id = self.shard_id,
+                    operation = "player_lobby_enter",
+                    userid = player.userid,
+                },
+                "Lobby player entry failed"
+            )
+        end
     end
 
     if type(player.ListenForEvent) == "function"
@@ -706,6 +1180,19 @@ function AgonRuntime:OnPlayerAdded(player)
         player._agon_player_connection_hook = true
         player:ListenForEvent("onremove", function()
             self:OnPlayerRemoved(player)
+        end)
+    end
+    if type(player.ListenForEvent) == "function"
+        and player._agon_death_policy_hooks ~= true then
+        player._agon_death_policy_hooks = true
+        player:ListenForEvent("death", function(_, data)
+            self:OnPlayerDeath(player, data)
+        end)
+        player:ListenForEvent("respawnfromghost", function(_, data)
+            self:OnPlayerRevived(player, data)
+        end)
+        player:ListenForEvent("respawnfromcorpse", function(_, data)
+            self:OnPlayerRevived(player, data)
         end)
     end
     self:RefreshPlayerClassified(player)
@@ -722,15 +1209,72 @@ function AgonRuntime:OnPlayerRemoved(player)
     if self.player_classifieds ~= nil then
         self.player_classifieds[player.userid] = nil
     end
+    if self.spectator_service ~= nil
+        and type(self.spectator_service.OnPlayerRemoved) == "function" then
+        self.spectator_service:OnPlayerRemoved(player)
+    elseif self.lobby_service ~= nil then
+        self.lobby_service:OnPlayerRemoved(player)
+    end
     if self.instance_manager ~= nil then
         self.instance_manager:MarkDisconnected(player.userid, "player_removed")
     end
+    if self.restore_queue ~= nil then
+        self.restore_queue:MarkDisconnected(player.userid, "player_removed")
+    end
     return true
+end
+
+function AgonRuntime:OnPlayerDeath(player, data)
+    if player == nil or not IsNonEmptyString(player.userid)
+        or self.instance_manager == nil then
+        return false, Diagnostics.ERROR_CODES.INVALID_WORLD
+    end
+    local participant = self.instance_manager:GetParticipant(player.userid)
+    if participant == nil then
+        return false, "PARTICIPANT_NOT_FOUND"
+    end
+    local instance = self.instance_manager:Get(participant.instance_id)
+    local policy = instance ~= nil and instance:GetDeathPolicy() or nil
+    if policy == nil or type(policy.OnPlayerDeath) ~= "function" then
+        return false, "DEATH_POLICY_UNAVAILABLE"
+    end
+    local record, code = policy:OnPlayerDeath(participant, player, data)
+    self:RefreshPlayerClassified(player)
+    if record == nil then
+        return false, code
+    end
+    return true, code
+end
+
+function AgonRuntime:OnPlayerRevived(player, data)
+    if player == nil or not IsNonEmptyString(player.userid)
+        or self.instance_manager == nil then
+        return false, Diagnostics.ERROR_CODES.INVALID_WORLD
+    end
+    local participant = self.instance_manager:GetParticipant(player.userid)
+    if participant == nil then
+        return false, "PARTICIPANT_NOT_FOUND"
+    end
+    local instance = self.instance_manager:Get(participant.instance_id)
+    local policy = instance ~= nil and instance:GetDeathPolicy() or nil
+    if policy == nil or type(policy.OnPlayerRevived) ~= "function" then
+        return false, "DEATH_POLICY_UNAVAILABLE"
+    end
+    local source = type(data) == "table" and (data.user or data.source) or nil
+    local revived, code = policy:OnPlayerRevived(player, source)
+    self:RefreshPlayerClassified(player)
+    return revived, code
 end
 
 function AgonRuntime:AddParticipant(instance_id, userid, options)
     if not self:IsReady() then
         return nil, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local restore_entry = self.restore_queue ~= nil
+        and self.restore_queue:Get(userid)
+        or nil
+    if restore_entry ~= nil and restore_entry.state ~= RestoreQueue.STATES.RESTORED then
+        return nil, Diagnostics.ERROR_CODES.RESTORE_QUEUE_PENDING
     end
     local participant, code = self.instance_manager:AddParticipant(
         instance_id,
@@ -740,10 +1284,63 @@ function AgonRuntime:AddParticipant(instance_id, userid, options)
     if participant ~= nil and self.player_classified_players ~= nil then
         local player = self.player_classified_players[userid]
         if player ~= nil then
+            if self.lobby_service ~= nil then
+                self.lobby_service:OnPlayerRemoved(player)
+            end
             self:RefreshPlayerClassified(player)
         end
     end
     return participant, code
+end
+
+function AgonRuntime:EnterLobby(player, options)
+    if not self:IsReady() or self.lobby_service == nil then
+        return nil, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local session, code = self.lobby_service:Enter(player, options)
+    if session ~= nil and type(player) == "table" then
+        self:RefreshPlayerClassified(player)
+    end
+    return session, code
+end
+
+function AgonRuntime:EnterSpectator(player, instance_id, options)
+    if not self:IsReady() or self.spectator_service == nil then
+        return nil, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local userid = type(player) == "table" and player.userid or player
+    local restore_entry = self.restore_queue ~= nil
+        and self.restore_queue:Get(userid)
+        or nil
+    if restore_entry ~= nil and restore_entry.state ~= RestoreQueue.STATES.RESTORED then
+        return nil, Diagnostics.ERROR_CODES.RESTORE_QUEUE_PENDING
+    end
+    local session, code = self.spectator_service:Enter(player, instance_id, options)
+    if session ~= nil and type(player) == "table" then
+        self:RefreshPlayerClassified(player)
+    end
+    return session, code
+end
+
+function AgonRuntime:ExitSpectator(player_or_userid, reason, options)
+    if not self:IsReady() or self.spectator_service == nil then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local exited, code = self.spectator_service:Exit(player_or_userid, reason, options)
+    local player = type(player_or_userid) == "table"
+        and player_or_userid
+        or self.player_classified_players[player_or_userid]
+    if exited and player ~= nil then
+        self:RefreshPlayerClassified(player)
+    end
+    return exited, code
+end
+
+function AgonRuntime:CanViewSpectator(observer, target)
+    if not self:IsReady() or self.spectator_service == nil then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    return self.spectator_service:CanView(observer, target)
 end
 
 function AgonRuntime:RemoveParticipant(instance_id, userid, reason)
@@ -848,11 +1445,109 @@ function AgonRuntime:RunWP7Diagnostics()
     return passed, code
 end
 
-function AgonRuntime:CreateInstance(mode_id, userids)
+function AgonRuntime:RunWP8Diagnostics()
+    if not self:IsReady() then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local passed, code = Wp8Diagnostics.Run(self)
+    Diagnostics.Log(
+        passed and Diagnostics.RESULTS.WP8_TEST_PASS or code,
+        {
+            shard_id = self.shard_id,
+            operation = "wp8_diagnostics",
+            core_status = self.core_status,
+        },
+        passed and "WP8 lobby, spectator and death policy diagnostics passed"
+            or tostring(code)
+    )
+    return passed, code
+end
+
+function AgonRuntime:RunWP9Diagnostics()
+    if not self:IsReady() then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    local passed, code = Wp9Diagnostics.Run(self)
+    Diagnostics.Log(
+        passed and Diagnostics.RESULTS.WP9_TEST_PASS or code,
+        {
+            shard_id = self.shard_id,
+            operation = "wp9_diagnostics",
+            core_status = self.core_status,
+            pending_restore_count = self.restore_queue ~= nil
+                and self.restore_queue:GetPendingCount()
+                or 0,
+            backend_pending_count = self.backend_adapter ~= nil
+                and self.backend_adapter:GetPendingCount()
+                or 0,
+        },
+        passed and "WP9 persistence, recovery queue and backend diagnostics passed"
+            or tostring(code)
+    )
+    return passed, code
+end
+
+function AgonRuntime:RetryRestore(subject, player)
+    if self.restore_queue == nil then
+        return false, Diagnostics.ERROR_CODES.RESTORE_QUEUE_INVALID
+    end
+    local restored, code = self.restore_queue:Retry(subject, player)
+    if restored and type(player) == "table" then
+        self:EnterLobby(player, { move = true })
+        self:RefreshPlayerClassified(player)
+    end
+    return restored, code
+end
+
+function AgonRuntime:GetRestoreQueueSnapshot()
+    return self.restore_queue ~= nil and self.restore_queue:GetSnapshot() or nil
+end
+
+function AgonRuntime:SubmitGameResult(result)
+    if self.backend_adapter == nil then
+        return false, Diagnostics.ERROR_CODES.BACKEND_NOT_CONFIGURED
+    end
+    return self.backend_adapter:SubmitGameResult(result)
+end
+
+function AgonRuntime:SubmitSettlement(settlement)
+    if self.backend_adapter == nil then
+        return false, Diagnostics.ERROR_CODES.BACKEND_NOT_CONFIGURED
+    end
+    return self.backend_adapter:SubmitSettlement(settlement)
+end
+
+function AgonRuntime:RetryBackend(identifier)
+    if self.backend_adapter == nil then
+        return false, Diagnostics.ERROR_CODES.BACKEND_NOT_CONFIGURED
+    end
+    return self.backend_adapter:RetryPending(identifier)
+end
+
+function AgonRuntime:DispatchRpc(context, request)
+    local restore_entry = context ~= nil and self.restore_queue ~= nil
+        and self.restore_queue:Get(context.userid)
+        or nil
+    if restore_entry ~= nil and restore_entry.state ~= RestoreQueue.STATES.RESTORED then
+        return false, Diagnostics.ERROR_CODES.RESTORE_QUEUE_PENDING
+    end
+    if type(request) == "table" and Rpc.SPECTATOR_ACTIONS[request.action] then
+        if self.spectator_service == nil then
+            return false, SpectatorService.ERROR_CODES.INVALID_SERVICE
+        end
+        local result, code = self.spectator_service:HandleRpc(context, request)
+        -- Enter 返回 session table，Exit/Target 返回 true；统一成 RPC 所需的布尔结果。
+        return result ~= nil and result ~= false, code
+    end
+    -- 其他玩法动作仍由后续 Mode/Action router 处理；WP4 只负责通用校验。
+    return true
+end
+
+function AgonRuntime:CreateInstance(mode_id, userids, options)
     if not self:IsReady() then
         return nil, Diagnostics.ERROR_CODES.CORE_NOT_READY
     end
-    return self.instance_manager:Create(mode_id, userids)
+    return self.instance_manager:Create(mode_id, userids, options)
 end
 
 function AgonRuntime:StartInstance(instance_id, reason)
@@ -899,6 +1594,38 @@ function AgonRuntime:ValidateCore()
     if not profiles_valid then
         return false, profiles_code
     end
+    if self.lobby_service == nil
+        or type(self.lobby_service.Validate) ~= "function" then
+        return false, Diagnostics.ERROR_CODES.CORE_INIT_FAILED
+    end
+    local lobby_valid, lobby_code = self.lobby_service:Validate()
+    if not lobby_valid then
+        return false, lobby_code
+    end
+    if self.spectator_service == nil
+        or type(self.spectator_service.Validate) ~= "function" then
+        return false, Diagnostics.ERROR_CODES.CORE_INIT_FAILED
+    end
+    local spectator_valid, spectator_code = self.spectator_service:Validate()
+    if not spectator_valid then
+        return false, spectator_code
+    end
+    if self.restore_queue == nil
+        or type(self.restore_queue.Validate) ~= "function" then
+        return false, Diagnostics.ERROR_CODES.RESTORE_QUEUE_INVALID
+    end
+    local queue_valid, queue_code = self.restore_queue:Validate()
+    if not queue_valid then
+        return false, queue_code or Diagnostics.ERROR_CODES.RESTORE_QUEUE_INVALID
+    end
+    if self.backend_adapter == nil
+        or type(self.backend_adapter.Validate) ~= "function" then
+        return false, Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+    end
+    local backend_valid, backend_code = self.backend_adapter:Validate()
+    if not backend_valid then
+        return false, backend_code or Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SNAPSHOT
+    end
     return self.instance_manager:Validate()
 end
 
@@ -940,6 +1667,35 @@ function AgonRuntime:DebugZones()
     return true
 end
 
+function AgonRuntime:DebugRecovery()
+    if not self:IsReady() then
+        return false
+    end
+    if self.restore_queue ~= nil then
+        Diagnostics.Log(
+            Diagnostics.RESULTS.RESTORE_COMPLETE,
+            {
+                shard_id = self.shard_id,
+                operation = "debug_recovery",
+                pending_restore_count = self.restore_queue:GetPendingCount(),
+            },
+            self.restore_queue:GetDebugString()
+        )
+    end
+    if self.backend_adapter ~= nil then
+        Diagnostics.Log(
+            Diagnostics.RESULTS.BACKEND_PENDING,
+            {
+                shard_id = self.shard_id,
+                operation = "debug_recovery",
+                backend_pending_count = self.backend_adapter:GetPendingCount(),
+            },
+            self.backend_adapter:GetDebugString()
+        )
+    end
+    return true
+end
+
 function AgonRuntime:GetSnapshot()
     return self:OnSave()
 end
@@ -961,8 +1717,14 @@ function AgonRuntime:GetDebugString()
     local zone_count = self.zone_manager ~= nil
         and self.zone_manager:Count()
         or 0
+    local pending_restore_count = self.restore_queue ~= nil
+        and self.restore_queue:GetPendingCount()
+        or 0
+    local backend_pending_count = self.backend_adapter ~= nil
+        and self.backend_adapter:GetPendingCount()
+        or 0
     return string.format(
-        "schema=%d shard=%s boot=%d layout=%s v=%d core=%s offset=%s,%s resolved=%s,%s world=%s,%s instances=%d zones=%d errors=%d",
+        "schema=%d shard=%s boot=%d layout=%s v=%d core=%s offset=%s,%s resolved=%s,%s world=%s,%s instances=%d zones=%d restores=%d backend_pending=%d errors=%d",
         self.schema_version,
         self.shard_id,
         self.boot_generation,
@@ -977,6 +1739,8 @@ function AgonRuntime:GetDebugString()
         portal_world ~= nil and tostring(portal_world.z) or "nil",
         instance_count,
         zone_count,
+        pending_restore_count,
+        backend_pending_count,
         error_count
     )
 end

@@ -252,8 +252,15 @@ function Participant.AttachPlayer(self, player, generation, now)
     self.player_ref = player
     self.disconnected_at = nil
     if self.state == Participant.STATES.DISCONNECTED then
+        -- 断线期间死亡状态仍属于原 Instance；重连不能先伪装成 READY/ALIVE。
+        local reconnect_state = Participant.STATES.READY
+        if self.death_state == Participant.DEATH_STATES.GHOST then
+            reconnect_state = Participant.STATES.GHOST
+        elseif self.death_state == Participant.DEATH_STATES.CORPSE then
+            reconnect_state = Participant.STATES.CORPSE
+        end
         return self:TransitionTo(
-            Participant.STATES.READY,
+            reconnect_state,
             "player_reconnected",
             generation,
             now

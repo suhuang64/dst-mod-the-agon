@@ -81,6 +81,19 @@ Diagnostics.ERROR_CODES =
     PLAYER_SANDBOX_INVALID = "PLAYER_SANDBOX_INVALID",
     PLAYER_SANDBOX_RESTORE_PENDING = "PLAYER_SANDBOX_RESTORE_PENDING",
     PLAYER_SANDBOX_RESTORE_BLOCKED = "PLAYER_SANDBOX_RESTORE_BLOCKED",
+    PERSISTENCE_INVALID_SNAPSHOT = "PERSISTENCE_INVALID_SNAPSHOT",
+    PERSISTENCE_INVALID_SCHEMA = "PERSISTENCE_INVALID_SCHEMA",
+    PERSISTENCE_MIGRATION_FAILED = "PERSISTENCE_MIGRATION_FAILED",
+    PERSISTENCE_NON_SERIALIZABLE = "PERSISTENCE_NON_SERIALIZABLE",
+    RECOVERY_FAILED = "RECOVERY_FAILED",
+    RECOVERY_PARTIAL = "RECOVERY_PARTIAL",
+    RECOVERY_ZONE_QUARANTINED = "RECOVERY_ZONE_QUARANTINED",
+    RESTORE_QUEUE_INVALID = "RESTORE_QUEUE_INVALID",
+    RESTORE_QUEUE_PENDING = "RESTORE_QUEUE_PENDING",
+    RESTORE_QUEUE_BLOCKED = "RESTORE_QUEUE_BLOCKED",
+    BACKEND_NOT_CONFIGURED = "BACKEND_NOT_CONFIGURED",
+    BACKEND_PENDING = "BACKEND_PENDING",
+    BACKEND_IMMUTABLE_MISMATCH = "BACKEND_IMMUTABLE_MISMATCH",
 }
 
 Diagnostics.RESULTS =
@@ -97,6 +110,12 @@ Diagnostics.RESULTS =
     WP5_TEST_PASS = "WP5_TEST_PASS",
     WP6_TEST_PASS = "WP6_TEST_PASS",
     WP7_TEST_PASS = "WP7_TEST_PASS",
+    WP8_TEST_PASS = "WP8_TEST_PASS",
+    WP9_TEST_PASS = "WP9_TEST_PASS",
+    RECOVERY_COMPLETE = "RECOVERY_COMPLETE",
+    RECOVERY_PARTIAL = "RECOVERY_PARTIAL",
+    RESTORE_COMPLETE = "RESTORE_COMPLETE",
+    BACKEND_PENDING = "BACKEND_PENDING",
     INSTANCE_LIST = "INSTANCE_LIST",
     ZONE_LIST = "ZONE_LIST",
 }
@@ -164,6 +183,9 @@ local CONTEXT_FIELDS =
     "free_zone_count",
     "mode_count",
     "aborted_instance_count",
+    "pending_restore_count",
+    "quarantined_zone_count",
+    "backend_pending_count",
 }
 
 local function CopyState(state)
@@ -280,6 +302,15 @@ function Diagnostics.ValidateSnapshot(snapshot)
         if snapshot.diagnostics.last_message ~= nil
             and type(snapshot.diagnostics.last_message) ~= "string" then
             return false, Diagnostics.ERROR_CODES.INVALID_SNAPSHOT
+        end
+    end
+
+    if snapshot.persistence ~= nil then
+        if type(snapshot.persistence) ~= "table"
+            or snapshot.persistence.schema_version ~= Diagnostics.SCHEMA_VERSION
+            or (snapshot.persistence.restart_policy ~= nil
+                and snapshot.persistence.restart_policy ~= "ABORT_ON_RESTART") then
+            return false, Diagnostics.ERROR_CODES.PERSISTENCE_INVALID_SCHEMA
         end
     end
 

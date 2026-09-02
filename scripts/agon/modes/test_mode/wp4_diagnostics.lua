@@ -28,9 +28,53 @@ local function HasState(records, state_id)
 end
 
 local function MakeTestPlayer(userid)
+    local state =
+    {
+        inventory =
+        {
+            slots = {},
+            equipment = {},
+            active_item = nil,
+            containers = {},
+        },
+        survival_stats =
+        {
+            health = { current = 100, max = 100, penalty = 0, invincible = false },
+            hunger = { current = 100, max = 100 },
+            sanity = { current = 100, max = 100, mode = 0, sane = true },
+            temperature = { current = 25 },
+            moisture = { current = 0, max = 100 },
+            temporary = {},
+        },
+        skilltree =
+        {
+            handshake_complete = true,
+            xp = 0,
+            points = 0,
+            activated_skills = {},
+            selection = {},
+            encoded_data = "",
+            character_prefab = "wilson",
+        },
+        character =
+        {
+            prefab = "wilson",
+            appearance = {},
+            resources = {},
+            followers = {},
+            pets = {},
+            summoned = {},
+            components = {},
+            abilities = {},
+            movement_speed = 1,
+        },
+        movement_speed = 1,
+    }
     return
     {
         userid = userid,
+        agon_sandbox_test = true,
+        agon_sandbox_state = state,
         IsValid = function()
             return true
         end,

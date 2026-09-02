@@ -320,6 +320,71 @@ function AudienceStateChannel.GetSnapshot(self)
     }
 end
 
+function AudienceStateChannel.OnLoad(self, data)
+    if data == nil then
+        return true
+    end
+    if type(data) ~= "table"
+        or data.schema_version ~= self.schema_version
+        or (data.states ~= nil and type(data.states) ~= "table")
+        or (data.next_version ~= nil
+            and (type(data.next_version) ~= "number"
+                or data.next_version < 0
+                or data.next_version ~= math.floor(data.next_version))) then
+        return false, AudienceStateChannel.ERROR_CODES.INVALID_VALUE
+    end
+
+    self.states_by_id = {}
+    self.state_order = {}
+    self.next_version = data.next_version or 0
+    local max_version = self.next_version
+    for index = 1, #(data.states or {}) do
+        local source = data.states[index]
+        if type(source) ~= "table"
+            or not IsNonEmptyString(source.state_id)
+            or type(source.version) ~= "number"
+            or source.version < 0
+            or source.version ~= math.floor(source.version) then
+            return false, AudienceStateChannel.ERROR_CODES.INVALID_VALUE
+        end
+        local audience, audience_code = NormalizeAudience(source.audience)
+        if audience == nil then
+            return false, audience_code
+        end
+        local value, invalid = CopySerializable(source.value)
+        if invalid then
+            return false, AudienceStateChannel.ERROR_CODES.INVALID_VALUE
+        end
+        -- Instance/Group/Spectator 依赖上一启动代的 membership/session，
+        -- ABORT_ON_RESTART 后不能直接暴露；PUBLIC/PRIVATE 才可安全续存。
+        if (audience.kind == AudienceStateChannel.KINDS.PUBLIC
+            or audience.kind == AudienceStateChannel.KINDS.PRIVATE)
+            and source.instance_id == nil then
+            if self.states_by_id[source.state_id] ~= nil then
+                return false, AudienceStateChannel.ERROR_CODES.INVALID_STATE_ID
+            end
+            local record =
+            {
+                state_id = source.state_id,
+                version = source.version,
+                created_at = source.created_at,
+                updated_at = source.updated_at,
+                audience = audience,
+                value = value,
+                instance_id = nil,
+                mode_id = nil,
+            }
+            self.states_by_id[source.state_id] = record
+            table.insert(self.state_order, source.state_id)
+            if source.version > max_version then
+                max_version = source.version
+            end
+        end
+    end
+    self.next_version = max_version
+    return true
+end
+
 function AudienceStateChannel.Now(self)
     if type(self.now_fn) == "function" then
         return self.now_fn()
@@ -348,6 +413,7 @@ local function AttachMethods(channel)
     channel.Remove = AudienceStateChannel.Remove
     channel.ClearInstance = AudienceStateChannel.ClearInstance
     channel.GetSnapshot = AudienceStateChannel.GetSnapshot
+    channel.OnLoad = AudienceStateChannel.OnLoad
     channel.Now = AudienceStateChannel.Now
     channel.GetDebugString = AudienceStateChannel.GetDebugString
     return channel
