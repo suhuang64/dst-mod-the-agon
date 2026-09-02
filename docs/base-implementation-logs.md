@@ -906,3 +906,53 @@ docs(base): 修正执行日志文件名
   ```text
   feat(recovery): 完成重启中止与幂等恢复结算
   ```
+
+### 1.34 2026-09-02：WP10 Base Release Gate 验收脚本与真实玩家安全边界
+
+#### 本轮范围
+
+- 承接 WP9，开始进入 WP10 Base Release Gate；只处理验收编排、证据边界和维护者操作入口，不新增正式玩法架构，不改动官方 `D:\OneDrive\DST\scripts`，不执行 commit、push、分支操作或历史改写。
+- 核对了当前 WP10 计划、`modmain.lua` 管理员命令、Runtime/Instance/PlayerSandbox/Spectator/Scene 接线和 `Test/World01` 的 `modoverrides.lua`。当前已有 `agon.test.wp4`–`agon.test.wp9`、`agon.instances`、`agon.zones`、`agon.recovery` 和 `agon.destroy_instance`；没有正式 TestMode 玩家 UI/匹配入口。
+- 新增 `docs/wp10-client-acceptance.md`，把服务端预检、真实客户端 A/B 身份、受控 Instance 绑定、双 Instance/Scene、PlayerSandbox/观战/死亡、四阶段重启、故障注入、`enable_agon=false` 硬门和结果表写成编号脚本；后续真实执行结果仍必须追加到本日志。
+
+#### 当前阻塞与安全判定
+
+- `SandboxService` 的 `allow_live_mutation` 默认关闭，真实玩家进入时会返回 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED`；只有显式合成玩家才允许 WP7 诊断修改状态。本轮没有通过内部字段、管理员命令或配置绕过该门，也没有把合成玩家结果写成真实玩家通过。
+- 因此 WP10 当前状态固定为“等待人工运行验收”，不能判定 `Base Ready`。是否增加严格限制在 `Test/World01`、默认关闭的真实玩家测试开关，属于会改变安全边界的单独实现决定，待确认后再做。
+- 已知 `hermitcrab_relocation_manager`/`wagpunk_arena_manager` 两条官方 set-piece angle 错误继续只记录、不处理；第二 shard/cross-shard、真实 UI/StateGraph、真实玩家逐字段恢复、四阶段重启矩阵和完整故障注入仍未验证。
+
+#### 本轮验证
+
+- 只完成文档/代码路径核对，未启动专服、未修改 Test/World01 存档，未产生新的运行证据；WP9 的官方专服证据继续以 1.33 为准。
+- 需要由维护者按 `docs/wp10-client-acceptance.md` 操作两个真实客户端并返回每项的时间、日志范围、Instance/Zone/revision/seed、客户端异常和结果；收到结果后再更新本节，不提前结论。
+
+### 1.35 2026-09-02：WP10 服务端硬门预检、控制台入口修正与干净收口
+
+#### `enable_agon` 硬门
+
+- 只对 `D:\OneDrive\DST\klei\DoNotStarveTogether\Test\World01\modoverrides.lua` 临时设置 `enable_agon=false`，Mod 仍保持 `enabled=true`；使用官方 `dontstarve_dedicated_server_nullrenderer_x64.exe`、Cluster=`Test`、Shard=`World01` 启动。
+- 日志在本轮启动时间 `20:30:15` 之后确认读取 `enable_agon=false`，普通世界完成加载、World01 `12000` 和 Master `11889` 正常启动；从该次启动位置没有新的 `LAYOUT_READY`、`CORE_READY`、Agon runtime 初始化或 BackendAdapter 请求。只出现既有两条官方 set-piece angle 错误；随后 `c_shutdown()` 正常完成快照 `#35`、`#36`，进程退出。
+- 配置已恢复为 `enable_agon=true`，没有留下 false 状态。
+
+#### true 配置回归与入口问题
+
+- true 配置重启成功加载既有快照 `#36`，输出 `LAYOUT_READY`、`CORE_READY` 和 `free_zone_count=10`。用 `c_announce((function() ... runtime:RunWP4Diagnostics() ... end)())` 形式调用 Runtime，得到 `WP4_TEST_PASS`、`WP5_TEST_PASS`、`WP6_TEST_PASS`、`WP7_TEST_PASS`、`WP8_TEST_PASS`、`WP9_TEST_PASS`；随后得到 `WP10_VALIDATE:true:nil`。
+- 直接把 `agon.test.wp4`–`agon.test.wp9`、`agon.instances`、`agon.zones`、`agon.recovery` 输给专服 `RemoteCommandInput`，以及加 `/` 的变体，均被当作 Lua 源码而不是 UserCommand，产生 `attempt to call a nil value`。这是本轮发现的控制台入口格式错误，不是 Agon 代码路径错误；验收脚本已改为已验证的 Runtime 表达式，并明确禁止继续使用直输格式。
+- true 配置下 Runtime Debug 输出为 `schema=1 shard=1 boot=1 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=1 backend_pending=2 errors=0`；这些 pending 是 WP9 诊断故意留下的内存测试记录，不作为干净收口证据。
+
+#### 回滚与最终收口
+
+- `c_shutdown()` 会把本次诊断写成快照 `#37`、`#38`；随后在同一官方专服内执行 `c_rollback(2)`，明确移除 `#37`、`#38` 并重新载入 `#36`。回滚后的日志输出 `RECOVERY_COMPLETE ... aborted_instance_count=0 pending_restore_count=0 quarantined_zone_count=0`、`CORE_READY ... instance_count=0 zone_count=10 free_zone_count=10`。
+- 最终 Runtime 探针输出：
+
+  ```text
+  WP10_FINAL:schema=1 shard=1 boot=1 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=0 backend_pending=0 errors=0:valid=true:nil
+  ```
+
+- 最后执行 `c_shutdown()` 正常生成快照 `#37`、`#38` 并退出；确认没有 `dontstarve_dedicated_server_nullrenderer_x64` 进程、`12000/11889` 无监听。Test/World01 的配置保持 `enable_agon=true`。本轮没有真实客户端加入，没有宣称 WP10 完整通过。
+
+#### 文档与边界
+
+- 修正 `docs/wp10-client-acceptance.md`：服务端专服控制台统一使用 Runtime 表达式，场景/启动/销毁示例不再要求直接输入未验证的 `agon.*` 字符串；明确当前真实玩家 `PLAYER_SANDBOX_LIVE_MUTATION_DISABLED` 安全边界。
+- `git diff --check` 和 Markdown code fence 检查通过；未修改官方源码，未全局安装工具，未执行 commit、push、分支切换或历史改写。
+- WP10 仍为“等待人工运行验收”：真实双客户端/UI、真实玩家逐字段恢复、四阶段重启矩阵、故障注入/QUARANTINED 修复、第二 shard/cross-shard、真实 Backend transport 和生产 UI 尚未完成。
