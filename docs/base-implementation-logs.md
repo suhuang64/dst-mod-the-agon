@@ -992,3 +992,54 @@ docs(base): 修正执行日志文件名
 - 在完成 Test/World01 服务端验证后检查本机现有 DST 客户端：检测到一个 `dontstarve_steam_x64` 进程和一个标题为 `Don't Starve Together` 的窗口；没有关闭、重启或修改这个用户现有客户端。
 - 尝试读取该窗口状态时，Windows Computer Use 的窗口激活/捕获连续返回 `SetIsBorderRequired failed: 不支持此接口 (0x80004002)`。按 UI 控制规范停止后续点击、键盘输入和登录操作，因此没有执行客户端 UserCommand、没有传输账号/密码，也没有把客户端窗口发现记作真实玩家验收通过。
 - 结论：WP10 服务端安全门和跨重启证据仍以 1.36 为准；真实双客户端/UI、管理员菜单显示、真实玩家绑定和逐字段恢复仍为 `WAITING_MAINTAINER`，需要在可用的客户端窗口捕获环境中由维护者继续按 `docs/wp10-client-acceptance.md` 执行。
+
+### 1.38 2026-09-04：维护者重新执行 WP10 预检与管理员开关回归
+
+- 维护者在同一官方 `Test/World01` 专服重新执行 WP4–WP9 预检。`WP4_TEST_PASS` 至 `WP9_TEST_PASS` 全部为 `true:nil`，`WP10_VALIDATE:true:nil`；`instances count=0`、`zones total=10 free=10`，Runtime Debug 为 `boot=9 ... instances=0 zones=10 ... errors=0 live_player_test=off test_context=eligible`。
+- 本轮 `WP9_TEST_PASS` 报告 `pending_restore_count=3 backend_pending_count=6`，随后 Debug 为 `restore_queue entries=6 pending=3 blocked=3`、`backend_adapter records=6 pending=6 submitted=0 transport=not_configured`。这些数量随每次 WP9 合成诊断增加，是诊断用恢复/后端边界记录，不是 WP4–WP9 失败；本轮没有活动 Instance 或被占用 Zone，后续测试不再重复执行 WP9。
+- 真实管理员客户端 userid `KU_aUxMQjy7` 依次执行 `status`、`on`、`status`、`off`、`status`；服务端确认关闭态、`PLAYER_TEST_ENABLED`、开启态、`PLAYER_TEST_DISABLED` 和最终 `enabled=false eligible=true code=nil`。真实客户端 UserCommand、`ADMIN` 权限、Test/World01 资格门、开启和关闭路径再次通过。
+- 维护者又用服务端 Runtime 备用入口执行开启、状态查询和关闭，得到 `WP10_PLAYER_TEST_ON:true:PLAYER_TEST_ENABLED`、`enabled=true eligible=true code=nil` 和 `WP10_PLAYER_TEST_OFF:true:PLAYER_TEST_DISABLED`；最终开关关闭。下一步只需让第二个真实客户端加入，记录 `WP10_PLAYERS`，再在创建真实 TestMode Instance 前由管理员执行一次 `on`。本轮没有修改代码、官方源码或其他 Cluster/存档。
+
+### 1.39 2026-09-04：两个真实客户端加入 Test/World01
+
+- 维护者在官方 `Test/World01` 服务器确认两个真实客户端同时在线，服务端输出 `WP10_PLAYERS:KU_0vPtVpg3,KU_aUxMQjy7`；两个 userid 不同，满足双客户端身份记录前置条件。
+- 当前尚未创建 TestMode Instance；下一步在创建 Instance 前由管理员客户端重新执行一次真实玩家开关 `on` 并查询状态。本项只证明真实客户端已被服务端识别，不提前宣称 Instance 绑定或客户端 UI 通过。
+
+### 1.40 2026-09-04：真实管理员客户端重新开启玩家测试开关
+
+- 在两个真实客户端已在线且尚未创建 Instance 的前提下，管理员客户端 `KU_aUxMQjy7` 执行 `/agon.test.player_sandbox on`；服务端记录 `PLAYER_TEST_ENABLED ... operation=live_player_test_on`。
+- 随后执行 `/agon.test.player_sandbox status`；服务端记录 `PLAYER_TEST_STATUS ... enabled=true eligible=true code=nil`。本项 PASS：创建真实 `TEST_MODE` Instance 所需的进程内开关已在正确的 Test/World01 资格下开启。
+- 下一步使用已记录的真实 userid `KU_0vPtVpg3` 与 `KU_aUxMQjy7` 做受控 Instance 创建/绑定；本轮尚未创建 Instance，未宣称玩家绑定或客户端 UI 通过。
+
+### 1.41 2026-09-04：清理 SkillTree 握手失败的真实玩家 Instance
+
+- 真实玩家绑定失败后，维护者通过当前在线管理员客户端执行正式 `DestroyInstance("agon:1:64", "wp10_skilltree_handshake_failed")`。
+- 服务端返回 `WP10_FAILED_BIND_CLEANUP:true:INSTANCE_DESTROYED`，确认失败 Instance 已按正常销毁 pipeline 清理；本次没有启动该 Instance，也没有重复创建或修改其他存档。
+- 下一步只读取两个真实玩家的 `skilltreeupdater`、`skilltree.save_enabled` 和握手标志，确认 `SKILLTREE_HANDSHAKE_REQUIRED` 的官方运行时原因后再决定是否需要代码接线调整。
+
+### 1.41 2026-09-04：真实玩家绑定首次尝试被 SkillTree 握手安全门拒绝
+
+- 维护者使用两个真实 userid `KU_0vPtVpg3`、`KU_aUxMQjy7` 创建 `TEST_MODE` Instance；创建成功，结果为 `WP10_INSTANCE_CREATE:agon:1:64:small_01`。
+- 随后绑定两个当前在线玩家时，A、B 均返回 `false:SKILLTREE_HANDSHAKE_REQUIRED`。这说明 Test/World01 资格开关已生效，但 PlayerSandbox 在进入清理/捕获流程前拒绝了尚未被识别为完成官方 SkillTree 握手的真实玩家；不能启动该 Instance，也不能把本次绑定记为通过。
+- 控制台首条输入残留 `end)())`，后续又把上一条 `[Announcement]` 文本作为 Lua 输入，产生两次 `attempt to call a nil value`；该错误属于控制台粘贴/回显输入污染，不是本次 SkillTree 绑定拒绝的原因。
+- 下一步先用正式 `DestroyInstance("agon:1:64", "wp10_skilltree_handshake_failed")` 清理失败 Instance，再只读取两个玩家的 `skilltreeupdater` 组件、`save_enabled` 和握手标志，确认官方握手完成路径后再决定是否需要实现/修正接线。本轮未修改代码、官方源码或其他 Cluster/存档。
+
+### 1.42 2026-09-04：真实玩家 SkillTree 握手状态确认
+
+- 维护者在失败 Instance 清理完成、两个真实客户端仍在线的情况下执行只读诊断，得到：`KU_0vPtVpg3`（`wilson`）和 `KU_aUxMQjy7`（`wortox`）均为 `updater=true`、`skilltree=true`、`save_enabled=false`、`agon_handshake=false`、`_agon_handshake=false`。
+- 结论：真实玩家的 SkillTree 组件存在，但当前运行时没有收到/设置本项目要求的握手完成标志；由于 `save_enabled` 也不是 `true`，`SkillTreeAdapter.HasLiveHandshake()` 必然返回 `false`，此前两名玩家的 `SKILLTREE_HANDSHAKE_REQUIRED` 属于当前代码接线未完成，不是客户端操作错误。
+- 本轮没有重新创建或启动 Instance，没有修改玩家状态、代码、官方源码或其他 Cluster/存档。WP10 真实绑定测试暂停在握手接线处，待明确并实现合法的客户端到服务端握手路径后再继续。
+
+### 1.43 2026-09-04：修复官方 SkillTree 握手接线
+
+- 根据官方 `D:\OneDrive\DST\scripts\prefabs\player_common_extensions.lua` 和
+  `D:\OneDrive\DST\scripts\components\skilltreeupdater.lua` 核对结果，真实握手的权威完成点是服务端玩家的 `POSTACTIVATEHANDSHAKE.READY`，随后官方在玩家实体上发出 `ms_skilltreeinitialized`；没有新增客户端自定义 RPC，也没有修改官方源码。
+- `scripts/components/agon_runtime.lua` 现在为每个在线玩家监听 `ms_skilltreeinitialized`，核对官方服务端 READY 状态后设置仅存在进程内的 `agon_skilltree_handshake_complete`；玩家移除时清除该标志。若重连恢复曾因 `SKILLTREE_HANDSHAKE_REQUIRED` 阻塞，握手完成事件会按原 transaction 调用受控 Retry，不删除原快照。
+- `scripts/agon/player/adapters/skilltree.lua` 不再把官方 `skilltree.save_enabled` 当作服务端握手证明，而是核对项目标志或官方 READY 状态；因此不会在官方客户端激活期间错误放行，也不会强行改写官方保存状态。新增 `SKILLTREE_HANDSHAKE_COMPLETE` 诊断结果和异常状态码，并补充诊断上下文字段。
+- 同步更新 `docs/base-design.md`、`docs/base-implementation-plan.md` 和 `docs/wp10-client-acceptance.md`，明确官方握手事件、服务端 READY 门和恢复重试规则；本次静态检查 `git diff --check` 通过，官方源码目录未修改。尚未重新启动官方 Test/World01，因此真实握手日志、绑定和恢复仍待下一轮实服验证。
+
+### 1.44 2026-09-04：收紧 SkillTree 放行依据
+
+- 复核后确认 `agon_skilltree_handshake_complete` 仅应作为官方事件到达后的进程内诊断缓存，不能单独成为放行条件；`SkillTreeAdapter` 现只接受官方服务端 `POSTACTIVATEHANDSHAKE.READY`，不再接受 `save_enabled=true` 或任意自定义标志作为替代。
+- `OnPlayerAdded` 会提前注册 `ms_skilltreeinitialized` 监听，并兼容运行时初始化晚于玩家激活的情况；握手完成后，对先前因 `SKILLTREE_HANDSHAKE_REQUIRED` 阻塞的恢复 transaction 执行受控 Retry。玩家移除时清除缓存标志。
+- 最终静态断言通过：适配器不存在 `save_enabled == true` 硬门，Runtime 含官方事件/READY 检查/恢复重试路径，`git diff --check` 通过；尚未重启官方 `klei/Test/World01`，因此代码修复尚未计入真实客户端 PASS。

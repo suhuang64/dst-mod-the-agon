@@ -1011,7 +1011,9 @@ scripts/agon/modes/test_mode/runtime.lua
 2. Capture 后先 Validate；未通过前绝不清空玩家。
 3. Inventory Adapter 覆盖背包、装备、鼠标物品和容器边界。
 4. Stats Adapter 覆盖生命、饥饿、理智、温度、潮湿和明确可恢复状态。
-5. SkillTree Adapter 核对服务端/客户端握手，保存 XP、点数、已选技能和编码数据。
+5. SkillTree Adapter 核对官方 `PostActivateHandshake` 的服务端 `READY` 状态和
+   `ms_skilltreeinitialized` 事件，保存 XP、点数、已选技能和编码数据；不得以
+   `skilltree.save_enabled` 代替握手证明。
 6. Character Adapter 处理角色特有资源、召唤物、宠物、跟随者和组件。
 7. PlayerProfile 支持统一基础三维、移动速度、初始物品、技能、允许/禁用能力和外观保留。
 8. TestMode 使用“只保留外观、统一能力”的 Profile。
@@ -1022,7 +1024,7 @@ scripts/agon/modes/test_mode/runtime.lua
 ### 官方源码核对
 
 - player inventory、active item 和 equip 保存路径；
-- skilltree、classified 与客户端确认；
+- skilltree、classified、官方 `PostActivateHandshake` 状态与客户端确认；
 - 各测试角色的特有组件和保存函数；
 - shard migration 和 player save/load 顺序。
 
@@ -1267,6 +1269,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 已实现仅限当前 Test/World01 的真实玩家验收开关：不新增公开配置项；官方 `ADMIN` 命令 `/agon.test.player_sandbox on|off|status` 只在专服、权威模拟、固定 Cluster 名称/描述和 `TheShard:GetShardId() == 1` 同时满足时允许开启。开关只存在内存、默认关闭；开启只传给后续新建的 `TEST_MODE` Instance，关闭会撤销现有 Instance 的 live 测试权限，重启不会继承。
 - 官方运行时已验证资格状态 `enabled=false eligible=true`、命令已注册且 `permission=ADMIN`，并验证关闭态 Instance 为 `allow_live_mutation=false`、开启后新 Instance 为 `true`；这只是安全门传播证据，不替代真实客户端/UI/StateGraph/逐字段恢复结果。
 - 已补做跨重启安全证据：开关开启后停服生成 snapshot `#47/#48`，同一 `Test/World01` 重启加载 `#48` 后 Runtime 输出 `enabled=false eligible=true`、`live_player_test=off`；说明开关不进入存档。服务端安全开关证据已完成，但在真实双客户端/UI、真实玩家逐字段恢复、四阶段重启矩阵和维护者结果返回前，WP10 仍不得进入 Base Ready。
+- 2026-09-04 真实双客户端首次绑定时发现 SkillTree 硬门缺少官方握手接线：两个玩家的 `skilltreeupdater`/`skilltree` 存在，但 `save_enabled=false` 且项目握手标志为 false，均被正确拒绝。修复方案固定为监听官方 `ms_skilltreeinitialized` 并核对服务端 `POSTACTIVATEHANDSHAKE.READY`；修复后的真实客户端回归仍需在 `Test/World01` 重新执行。
 
 ### 建议 Commit
 

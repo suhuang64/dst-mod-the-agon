@@ -893,6 +893,15 @@ PlayerSandbox 的真实玩家 live mutation 默认必须关闭。WP10 允许通�
 - 开关只存在于当前进程内，默认关闭，不写入 Runtime/Instance/PlayerSandbox snapshot；重启后必须再次由管理员开启。
 - 开启只给之后新建的 `TEST_MODE` Instance 注入显式 `allow_live_player_test`；其他 Mode、合成玩家规则和重启恢复路径不继承该权限。关闭时立即撤销现有 Instance 的 live 测试权限。
 - 真实玩家仍必须通过正常 Participant、PlayerSandbox Capture/Validate/Restore pipeline；该开关只解除环境测试门，不跳过状态校验、恢复或清理。
+- SkillTree 握手必须复用官方 `PostActivateHandshake` 生命周期：服务端仅在玩家的
+  `_PostActivateHandshakeState_Server == POSTACTIVATEHANDSHAKE.READY` 且收到官方
+  `ms_skilltreeinitialized` 事件后，设置进程内的
+  `agon_skilltree_handshake_complete` 标志。`skilltree.save_enabled` 是官方客户端保存
+  状态控制字段，不能作为服务端握手完成证明，也不能被 Mod 强行改写。
+- `SkillTreeAdapter` 的真实玩家硬门必须核对官方服务端 `READY` 状态；上述进程内标志
+  仅用于诊断和触发恢复重试，不能单独绕过官方硬门。握手完成前不得 Capture、清空、
+  应用 Profile 或 Restore。若玩家重连时恢复队列曾因握手未完成而阻塞，官方事件到达
+  后可以按原 transaction 进行一次受控 Retry，快照不能被删除。
 
 ---
 

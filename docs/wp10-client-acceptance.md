@@ -97,6 +97,14 @@ end)())
 
 把输出中的两个真实 `userid` 记为 `A_USERID`、`B_USERID`。不要把合成玩家的 userid 或客户端显示名当作证据。客户端 A/B 需要各自记录：加入时间、角色 prefab、是否位于 Lobby、Portal 相对位置、是否看到对方，以及客户端自己的异常/控制台信息。
 
+加入后必须等待官方 SkillTree `PostActivateHandshake` 完成。服务端应为每个真实玩家
+输出一次 `SKILLTREE_HANDSHAKE_COMPLETE`，并且只读诊断应显示
+`_PostActivateHandshakeState_Server=POSTACTIVATEHANDSHAKE.READY`（当前官方值为 `3`）、
+`agon_handshake=true`。该状态来自官方
+`ms_skilltreeinitialized` 事件；`skilltree.save_enabled=false` 本身是官方客户端激活
+期间的正常状态，不能据此判断握手失败或手工改成 `true`。若握手尚未完成，不得进入
+下一节创建/绑定 Instance。
+
 ## 5. 真实 Instance 绑定脚本
 
 当前仓库没有正式 TestMode UI，也没有把 `agon.test.create` 做成带玩家参数的产品入口。下面的控制台片段只用于 WP10 的受控服务端绑定证据，不代表正式客户端 UI；把 `A_USERID`、`B_USERID` 替换为第 3 节记录的值后再执行：

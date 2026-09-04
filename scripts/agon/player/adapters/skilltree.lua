@@ -48,12 +48,16 @@ local function MakeDefaultState(player)
     }
 end
 
+local function HasOfficialHandshake(player)
+    return type(player) == "table"
+        and type(POSTACTIVATEHANDSHAKE) == "table"
+        and player._PostActivateHandshakeState_Server
+            == POSTACTIVATEHANDSHAKE.READY
+end
+
 local function HasLiveHandshake(player, updater)
     return type(player) == "table"
-        and (player.agon_skilltree_handshake_complete == true
-            or player._agon_skilltree_handshake_complete == true
-            or (updater ~= nil and updater.skilltree ~= nil
-                and updater.skilltree.save_enabled == true))
+        and HasOfficialHandshake(player)
 end
 
 local function CaptureSynthetic(player)

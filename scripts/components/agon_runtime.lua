@@ -29,6 +29,13 @@ local function IsNonEmptyString(value)
     return type(value) == "string" and value ~= ""
 end
 
+local function IsOfficialSkillTreeReady(player)
+    return type(player) == "table"
+        and type(POSTACTIVATEHANDSHAKE) == "table"
+        and player._PostActivateHandshakeState_Server
+            == POSTACTIVATEHANDSHAKE.READY
+end
+
 local function GetShardId()
     if TheShard ~= nil and type(TheShard.GetShardId) == "function" then
         local shard_id = TheShard:GetShardId()
@@ -1100,6 +1107,67 @@ function AgonRuntime:RefreshAllPlayerClassifieds()
     return true
 end
 
+function AgonRuntime:OnSkillTreeInitialized(player)
+    if not self:IsReady() or player == nil
+        or not IsNonEmptyString(player.userid) then
+        return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
+    end
+    if not IsOfficialSkillTreeReady(player) then
+        Diagnostics.Log(
+            Diagnostics.ERROR_CODES.SKILLTREE_HANDSHAKE_INVALID,
+            {
+                shard_id = self.shard_id,
+                operation = "skilltree_handshake",
+                userid = player.userid,
+                handshake_state = player._PostActivateHandshakeState_Server,
+            },
+            "received ms_skilltreeinitialized before official handshake reached READY"
+        )
+        return false, Diagnostics.ERROR_CODES.SKILLTREE_HANDSHAKE_INVALID
+    end
+
+    local already_complete = player.agon_skilltree_handshake_complete == true
+    player.agon_skilltree_handshake_complete = true
+    player._agon_skilltree_handshake_complete = nil
+    if not already_complete then
+        Diagnostics.Log(
+            Diagnostics.RESULTS.SKILLTREE_HANDSHAKE_COMPLETE,
+            {
+                shard_id = self.shard_id,
+                operation = "skilltree_handshake",
+                userid = player.userid,
+                character_prefab = player.prefab,
+                handshake_state = player._PostActivateHandshakeState_Server,
+            },
+            "official SkillTree post-activation handshake reached READY"
+        )
+    end
+
+    local restore_entry = self.restore_queue ~= nil
+        and self.restore_queue:Get(player.userid)
+        or nil
+    if restore_entry ~= nil
+        and restore_entry.state ~= RestoreQueue.STATES.RESTORED
+        and (restore_entry.last_error_code == nil
+            or restore_entry.last_error_code == "SKILLTREE_HANDSHAKE_REQUIRED") then
+        local restored, restore_code = self:RetryRestore(player.userid, player)
+        Diagnostics.Log(
+            restored and Diagnostics.RESULTS.RESTORE_COMPLETE or restore_code,
+            {
+                shard_id = self.shard_id,
+                operation = "player_handshake_restore",
+                userid = player.userid,
+                transaction_id = restore_entry.transaction_id,
+                pending_restore_count = self.restore_queue:GetPendingCount(),
+            },
+            restored and "player restore completed after SkillTree handshake"
+                or "player restore remains guarded after SkillTree handshake: "
+                    .. tostring(restore_code)
+        )
+    end
+    return true, already_complete and "ALREADY_COMPLETE" or nil
+end
+
 function AgonRuntime:OnPlayerAdded(player)
     if not self:IsReady() or player == nil or not IsNonEmptyString(player.userid) then
         return false, Diagnostics.ERROR_CODES.CORE_NOT_READY
@@ -1119,6 +1187,18 @@ function AgonRuntime:OnPlayerAdded(player)
     end
     self.player_classifieds[player.userid] = classified
     self.player_classified_players[player.userid] = player
+
+    if type(player.ListenForEvent) == "function"
+        and player._agon_skilltree_handshake_listener ~= true then
+        player._agon_skilltree_handshake_listener = true
+        player:ListenForEvent("ms_skilltreeinitialized", function(inst)
+            self:OnSkillTreeInitialized(inst)
+        end)
+    end
+    if IsOfficialSkillTreeReady(player)
+        and player.agon_skilltree_handshake_complete ~= true then
+        self:OnSkillTreeInitialized(player)
+    end
 
     local restore_entry = self.restore_queue ~= nil
         and self.restore_queue:Get(player.userid)
@@ -1224,6 +1304,8 @@ function AgonRuntime:OnPlayerRemoved(player)
     if self.restore_queue ~= nil then
         self.restore_queue:MarkDisconnected(player.userid, "player_removed")
     end
+    player.agon_skilltree_handshake_complete = nil
+    player._agon_skilltree_handshake_complete = nil
     return true
 end
 
