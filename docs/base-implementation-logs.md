@@ -1612,3 +1612,83 @@ docs(base): 修正执行日志文件名
 - 维护者在修复后进程执行 `WP10_RESTART_BASE`；`ValidateCore=true`、`instances=0`、恢复队列 `pending=0 blocked=0`、Backend `pending=0`，但 `small_01` 仍为旧 `agon:1:7` 所有的 `QUARANTINED`。
 - 隔离原因已确认为 `restart_recovery_failed:RESTORE_QUEUE_DUPLICATE_USER`；当前代码没有允许从 `QUARANTINED` 直接转为 `FREE` 的接口，符合“未完成实体/地形验证不得强制释放”的安全边界。
 - 修复后的 `RestoreQueue` 尚未加载到当前进程；下一步先正常关闭并重启以加载修复，再仅对可丢弃的 `Test/World01` 执行官方 `c_regenerateworld()`，获得 10 个空闲 Zone 后重新开始断线重绑定验收。
+
+### 2.45 2026-09-04：断线重绑定测试更换 A 玩家并完成干净基线
+
+- 因原 A=`KU_dNpFmz1P` 临时无法继续测试，本轮改用新 A=`KU_UR8pbyho`；B 保持 `KU_aUxMQjy7`。新 A 选择 `wilson`，B 继续使用 `wathgrithr`，均在当前 Character Adapter 支持范围内；存档目录中的末尾 `_` 不属于 userid。
+- 维护者重建/启动可丢弃的 `Test/World01` 后，服务端记录 `LAYOUT_READY`（400×400，Portal Tile 200,200）、`RECOVERY_COMPLETE`（`aborted_instance_count=0`、`pending_restore_count=0`、`quarantined_zone_count=0`）和 `CORE_READY`（`zone_count=10`、`free_zone_count=10`）。
+- 新 A=`KU_UR8pbyho` 与 B=`KU_aUxMQjy7` 均已加入并分别完成官方 SkillTree `handshake_state=3`；下一步重新开启 live player sandbox 开关，然后创建新的断线重绑定测试 Instance。
+
+### 2.46 2026-09-04：新玩家断线重绑定测试开关开启
+
+- B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox on` 成功；服务端输出 `PLAYER_TEST_ENABLED`，表示后续新建 `TEST_MODE` Instance 可进行 live player sandbox 测试。
+- 新 A=`KU_UR8pbyho` 与 B=`KU_aUxMQjy7` 保持在线；下一步仅创建测试 Instance，随后再分别执行 A/B 绑定。
+
+### 2.47 2026-09-04：新玩家断线重绑定测试 Instance 创建通过
+
+- 维护者创建包含 A=`KU_UR8pbyho`、B=`KU_aUxMQjy7` 的 `TEST_MODE` Instance；服务端公告 `WP10_INSTANCE_CREATE:agon:1:1:zone=small_01`。
+- 本项 PASS：新断线重绑定测试 Instance 为 `agon:1:1`，区域为 `small_01`；下一步先绑定 A。
+
+### 2.48 2026-09-04：新玩家断线重绑定测试 A 绑定通过
+
+- 维护者将新 A=`KU_UR8pbyho` 绑定到 `agon:1:1`，服务端公告 `WP10_ATTACH_A:true:nil`。
+- 本项 PASS；下一步绑定 B=`KU_aUxMQjy7`，然后确认两名玩家均进入同一 Instance 的 `SANDBOXED` 状态。
+
+### 2.49 2026-09-04：新玩家断线重绑定测试 B 绑定通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:1`，服务端公告 `WP10_ATTACH_B:true:nil`。
+- A/B 均已完成绑定调用；下一步执行只读 transaction 诊断，确认两人的沙箱状态、角色和错误码，再启动 Instance。
+
+### 2.50 2026-09-04：新玩家断线重绑定测试双玩家沙箱基线通过
+
+- 维护者读取 `agon:1:1` 的两个 transaction；服务端返回 `WP10_SANDBOX_A:state=SANDBOXED:clean=true:prefab=wilson:error=nil;WP10_SANDBOX_B:state=SANDBOXED:clean=true:prefab=wathgrithr:error=nil`。
+- 本项 PASS：A=`KU_UR8pbyho`、B=`KU_aUxMQjy7` 均已进入同一 Instance 的真实沙箱且无错误；下一步启动 Instance 后让 A 单独断线，B 保持在线。
+
+### 2.51 2026-09-04：新玩家断线重绑定测试 Instance 启动通过
+
+- 维护者启动 `agon:1:1`，服务端公告 `WP10_DISCONNECT_START:true:nil`。
+- Instance 已进入活动运行阶段；下一步让 A=`KU_UR8pbyho` 单独断线，B=`KU_aUxMQjy7` 保持在线，以验证断线状态隔离。
+
+### 2.52 2026-09-04：新 A 单独断线已被服务器确认
+
+- 官方服务器记录 A=`KU_UR8pbyho` 的 `SendUserDisconnect`、离开公告、从 Master 断开及用户序列化。
+- 当前证据未显示 B=`KU_aUxMQjy7` 断线；下一步执行 Runtime 只读诊断，核对 A 的 Participant/transaction 断线状态、B 的活动沙箱状态以及 Instance 生命周期。
+
+### 2.53 2026-09-04：新玩家断线状态隔离诊断通过
+
+- 维护者执行只读 Runtime 诊断；服务端返回 `WP10_DISCONNECT_STATE:A_participant=DISCONNECTED:A_player_ref=false:A_tx=RESTORE_PENDING:A_error=PLAYER_SANDBOX_PLAYER_DISCONNECTED:B_participant=READY:B_player_ref=true:B_tx=SANDBOXED:B_error=nil:instance=RUNNING:generation=3`。
+- 本项 PASS：A=`KU_UR8pbyho` 的断线只释放其运行时玩家引用并保留恢复事务；B=`KU_aUxMQjy7` 仍保持活动沙箱；`agon:1:1` 未被终止。
+- 下一步让 A 重新连接，等待官方 SkillTree `handshake_state=3`，验证握手完成后的自动 `PLAYER_RECONNECTED` 接线；不手动重复 Attach 或 Restore。
+
+### 2.54 2026-09-04：新 A 重连及握手后自动接线通过
+
+- A=`KU_UR8pbyho` 重新加入并恢复原用户存档；服务端记录官方 `SKILLTREE_HANDSHAKE_COMPLETE`（`handshake_state=3`、`character_prefab=wilson`）。
+- 握手完成后服务端紧接着输出 `[PLAYER_RECONNECTED]`，`instance_id=agon:1:1`，表示 A 已自动重新绑定活动 Instance；本次未出现 `PLAYER_SANDBOX_INVALID_STATE`。
+- 本项初步 PASS；下一步执行只读 Runtime 诊断，确认 A 的 Participant/transaction 已回到活动状态、B 仍为 `SANDBOXED`，并核对 Instance 仍在运行。
+
+### 2.55 2026-09-04：新 A 重连后的状态与事务复用验证通过
+
+- 维护者执行只读 Runtime 诊断；服务端返回 `WP10_RECONNECT_STATE:A_participant=READY:A_player_ref=true:A_tx=SANDBOXED:A_txid=agon:1:1:sandbox:1:A_error=nil:B_participant=READY:B_player_ref=true:B_tx=SANDBOXED:B_txid=agon:1:1:sandbox:2:B_error=nil:instance=RUNNING:generation=3`。
+- 本项 PASS：A/B 均恢复为活动沙箱，A 的重连未产生第二个 transaction，B 保持正常，Instance 继续运行；下一步销毁测试 Instance，验证恢复和 Zone/队列清理。
+
+### 2.56 2026-09-04：新玩家断线重绑定测试 Instance 清理调用通过
+
+- 维护者销毁 `agon:1:1`，服务端公告 `WP10_DISCONNECT_CLEANUP:true:INSTANCE_DESTROYED`。
+- Instance 清理调用成功；下一步执行最终 `ValidateCore`、Instance/Zone/Recovery Debug，确认恢复、释放和队列清理的最终状态。
+
+### 2.57 2026-09-04：新玩家断线重绑定测试最终清理通过
+
+- 维护者执行最终 Runtime 诊断；服务端返回 `WP10_DISCONNECT_FINAL:true:nil`，并确认 `instances count=0`、`zones free=10/10`、恢复队列 `entries=0 pending=0 blocked=0`、Backend `pending=0`、`errors=0`。
+- 本轮真实双玩家断线重绑定验收 PASS：A=`KU_UR8pbyho` 单独断线后，在官方 SkillTree 握手完成时自动输出 `PLAYER_RECONNECTED`，恢复为 `READY/SANDBOXED`，复用原 transaction；B=`KU_aUxMQjy7` 全程保持活动；销毁后所有资源清理干净。
+- 最终 Debug 显示 `live_player_test=on`；下一步关闭测试开关并确认状态为 `false`。
+
+### 2.58 2026-09-04：新玩家断线重绑定测试开关已关闭
+
+- B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox off` 成功；服务端输出 `PLAYER_TEST_DISABLED`。
+- 测试资源已清理，当前仅需执行一次状态查询确认 `enabled=false`，然后结束本轮验收。
+
+### 2.59 2026-09-04：新玩家断线重绑定测试正式收尾
+
+- B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox status`；服务端返回 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
+- 本轮验收正式完成：新 A=`KU_UR8pbyho` 在活动 Instance 中单独断线后，于官方 SkillTree `handshake_state=3` 完成时自动输出 `PLAYER_RECONNECTED`，回到 `READY/SANDBOXED` 并复用原 transaction；B=`KU_aUxMQjy7` 始终保持正常。
+- 最终清理已确认 `ValidateCore=true`、Instance 数量为 0、10 个 Zone 全部 `FREE`、恢复队列和 Backend 队列均为 0、错误数为 0；测试开关已关闭。
