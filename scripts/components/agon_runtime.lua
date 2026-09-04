@@ -174,8 +174,14 @@ local AgonRuntime = Class(function(self, inst)
     self._agon_on_player_joined = function(_, player)
         self:OnPlayerAdded(player)
     end
+    self._agon_on_player_activated = function(_, player)
+        self:OnPlayerAdded(player)
+    end
     self._agon_on_player_left = function(_, player)
         self:OnPlayerRemoved(player)
+    end
+    self._agon_on_skilltree_initialized = function(player)
+        self:OnSkillTreeInitialized(player)
     end
     self.saved_core = nil
 end)
@@ -764,6 +770,7 @@ function AgonRuntime:InitializePlayerTracking()
     end
     if self.inst ~= nil and type(self.inst.ListenForEvent) == "function" then
         self.inst:ListenForEvent("ms_playerjoined", self._agon_on_player_joined)
+        self.inst:ListenForEvent("playeractivated", self._agon_on_player_activated)
         self.inst:ListenForEvent("ms_playerleft", self._agon_on_player_left)
     end
     self.player_lifecycle_listeners_registered = true
@@ -1188,12 +1195,16 @@ function AgonRuntime:OnPlayerAdded(player)
     self.player_classifieds[player.userid] = classified
     self.player_classified_players[player.userid] = player
 
-    if type(player.ListenForEvent) == "function"
+    if self.inst ~= nil and type(self.inst.ListenForEvent) == "function"
         and player._agon_skilltree_handshake_listener ~= true then
+        -- 官方 linkeditemmanager 使用 TheWorld + player source 监听，避免在
+        -- player 实体重建/激活时错过 ms_skilltreeinitialized。
+        self.inst:ListenForEvent(
+            "ms_skilltreeinitialized",
+            self._agon_on_skilltree_initialized,
+            player
+        )
         player._agon_skilltree_handshake_listener = true
-        player:ListenForEvent("ms_skilltreeinitialized", function(inst)
-            self:OnSkillTreeInitialized(inst)
-        end)
     end
     if IsOfficialSkillTreeReady(player)
         and player.agon_skilltree_handshake_complete ~= true then
@@ -1304,6 +1315,16 @@ function AgonRuntime:OnPlayerRemoved(player)
     if self.restore_queue ~= nil then
         self.restore_queue:MarkDisconnected(player.userid, "player_removed")
     end
+    if player._agon_skilltree_handshake_listener == true
+        and self.inst ~= nil
+        and type(self.inst.RemoveEventCallback) == "function" then
+        self.inst:RemoveEventCallback(
+            "ms_skilltreeinitialized",
+            self._agon_on_skilltree_initialized,
+            player
+        )
+    end
+    player._agon_skilltree_handshake_listener = nil
     player.agon_skilltree_handshake_complete = nil
     player._agon_skilltree_handshake_complete = nil
     return true

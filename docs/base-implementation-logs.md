@@ -1043,3 +1043,16 @@ docs(base): 修正执行日志文件名
 - 复核后确认 `agon_skilltree_handshake_complete` 仅应作为官方事件到达后的进程内诊断缓存，不能单独成为放行条件；`SkillTreeAdapter` 现只接受官方服务端 `POSTACTIVATEHANDSHAKE.READY`，不再接受 `save_enabled=true` 或任意自定义标志作为替代。
 - `OnPlayerAdded` 会提前注册 `ms_skilltreeinitialized` 监听，并兼容运行时初始化晚于玩家激活的情况；握手完成后，对先前因 `SKILLTREE_HANDSHAKE_REQUIRED` 阻塞的恢复 transaction 执行受控 Retry。玩家移除时清除缓存标志。
 - 最终静态断言通过：适配器不存在 `save_enabled == true` 硬门，Runtime 含官方事件/READY 检查/恢复重试路径，`git diff --check` 通过；尚未重启官方 `klei/Test/World01`，因此代码修复尚未计入真实客户端 PASS。
+
+### 1.45 2026-09-04：修复后真实玩家加入但未观察到官方握手完成日志
+
+- 维护者重启官方 `klei/Test/World01` 后，服务端新进程先记录 `[TheAgon] [STARTED]` 和 `[TheAgon] [CORE_READY]`，随后 `KU_aUxMQjy7`、`KU_0vPtVpg3` 两名真实玩家加入；因此可以确认本轮已加载修复后的 Runtime，不是旧进程残留。
+- 本轮服务端日志没有出现 `[TheAgon] [SKILLTREE_HANDSHAKE_COMPLETE] ... handshake_state=3`。当前证据只能说明握手完成事件/READY 状态尚未被本项目观察到，不能把玩家加入或 SkillTree 组件存在当作握手成功，也没有创建 Instance。
+- 下一步先执行只读的官方字段诊断，分别读取 `_PostActivateHandshakeState_Server`、`POSTACTIVATEHANDSHAKE.READY` 比较结果、`skilltreeupdater`、官方 `skilltree` 对象和项目诊断标志；根据 state 是 `3`、中间态或 `nil` 再决定是监听时序问题、官方握手未完成，还是运行时字段兼容问题。
+
+### 1.46 2026-09-04：官方握手已 READY，但原接线未收到事件
+
+- 维护者执行只读诊断，得到 `KU_aUxMQjy7:prefab=wathgrithr:state=3:ready=true:updater=true:skilltree=true:agon=false` 和 `KU_0vPtVpg3:prefab=wilson:state=3:ready=true:updater=true:skilltree=true:agon=false`。
+- 结论：两名真实玩家均已完成官方 `PostActivateHandshake`，`SKILLTREE_HANDSHAKE_REQUIRED` 不是客户端握手失败；此前 Runtime 使用玩家实体监听，但没有收到/处理 `ms_skilltreeinitialized`，因此项目诊断标志和完成日志未出现。
+- 修复：将握手监听改为官方组件采用的 `TheWorld:ListenForEvent("ms_skilltreeinitialized", callback, player)` 玩家 source 形式，并在 `playeractivated` 与既有 `ms_playerjoined` 生命周期中重复确保 `OnPlayerAdded` 接线；玩家离开时移除 source listener。仍保留官方 READY 即时检查和原恢复重试逻辑。
+- 本轮没有创建 Instance，也没有绕过官方 READY 硬门；下一轮重启 Test/World01 后先确认两条 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3`，再继续真实玩家绑定。

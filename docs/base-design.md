@@ -896,8 +896,11 @@ PlayerSandbox 的真实玩家 live mutation 默认必须关闭。WP10 允许通�
 - SkillTree 握手必须复用官方 `PostActivateHandshake` 生命周期：服务端仅在玩家的
   `_PostActivateHandshakeState_Server == POSTACTIVATEHANDSHAKE.READY` 且收到官方
   `ms_skilltreeinitialized` 事件后，设置进程内的
-  `agon_skilltree_handshake_complete` 标志。`skilltree.save_enabled` 是官方客户端保存
-  状态控制字段，不能作为服务端握手完成证明，也不能被 Mod 强行改写。
+  `agon_skilltree_handshake_complete` 标志。接线采用官方组件使用的
+  `TheWorld:ListenForEvent("ms_skilltreeinitialized", callback, player)` 形式，并在
+  `playeractivated`/`ms_playerjoined` 生命周期中确保监听及时注册；不能只依赖玩家实体
+  上的监听。`skilltree.save_enabled` 是官方客户端保存状态控制字段，不能作为服务端
+  握手完成证明，也不能被 Mod 强行改写。
 - `SkillTreeAdapter` 的真实玩家硬门必须核对官方服务端 `READY` 状态；上述进程内标志
   仅用于诊断和触发恢复重试，不能单独绕过官方硬门。握手完成前不得 Capture、清空、
   应用 Profile 或 Restore。若玩家重连时恢复队列曾因握手未完成而阻塞，官方事件到达

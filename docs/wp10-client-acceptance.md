@@ -100,8 +100,9 @@ end)())
 加入后必须等待官方 SkillTree `PostActivateHandshake` 完成。服务端应为每个真实玩家
 输出一次 `SKILLTREE_HANDSHAKE_COMPLETE`，并且只读诊断应显示
 `_PostActivateHandshakeState_Server=POSTACTIVATEHANDSHAKE.READY`（当前官方值为 `3`）、
-`agon_handshake=true`。该状态来自官方
-`ms_skilltreeinitialized` 事件；`skilltree.save_enabled=false` 本身是官方客户端激活
+`agon_handshake=true`。Runtime 使用官方组件同型的 `TheWorld` + 玩家 source 监听，并由
+`playeractivated`/`ms_playerjoined` 生命周期保证接线时序；该状态来自官方
+`ms_skilltreeinitialized` 事件。`skilltree.save_enabled=false` 本身是官方客户端激活
 期间的正常状态，不能据此判断握手失败或手工改成 `true`。若握手尚未完成，不得进入
 下一节创建/绑定 Instance。
 

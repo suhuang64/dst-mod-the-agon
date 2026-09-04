@@ -1270,6 +1270,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 官方运行时已验证资格状态 `enabled=false eligible=true`、命令已注册且 `permission=ADMIN`，并验证关闭态 Instance 为 `allow_live_mutation=false`、开启后新 Instance 为 `true`；这只是安全门传播证据，不替代真实客户端/UI/StateGraph/逐字段恢复结果。
 - 已补做跨重启安全证据：开关开启后停服生成 snapshot `#47/#48`，同一 `Test/World01` 重启加载 `#48` 后 Runtime 输出 `enabled=false eligible=true`、`live_player_test=off`；说明开关不进入存档。服务端安全开关证据已完成，但在真实双客户端/UI、真实玩家逐字段恢复、四阶段重启矩阵和维护者结果返回前，WP10 仍不得进入 Base Ready。
 - 2026-09-04 真实双客户端首次绑定时发现 SkillTree 硬门缺少官方握手接线：两个玩家的 `skilltreeupdater`/`skilltree` 存在，但 `save_enabled=false` 且项目握手标志为 false，均被正确拒绝。修复方案固定为监听官方 `ms_skilltreeinitialized` 并核对服务端 `POSTACTIVATEHANDSHAKE.READY`；修复后的真实客户端回归仍需在 `Test/World01` 重新执行。
+- 2026-09-04 修复回归进一步确认两个玩家的官方状态均为 `state=3:ready=true`，但项目标志仍为 false，说明原玩家实体监听未实际接到官方事件。Runtime 已改为官方组件同型的 `TheWorld` + 玩家 source 监听，并增加 `playeractivated` 时序兜底；重启后必须再次观察 `SKILLTREE_HANDSHAKE_COMPLETE`，再继续真实 Instance 绑定。
 
 ### 建议 Commit
 
