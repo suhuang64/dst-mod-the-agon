@@ -182,6 +182,8 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 
 以下项目只有在真实玩家绑定成功后才可执行。没有正式 UI 时，维护者可以使用已经存在的官方游戏操作，但不得用合成玩家替代客户端画面、StateGraph 或网络可见性证据。
 
+本轮真实角色接线范围固定为 A=`wilson`、B=`wathgrithr`。A 通过官方 `beard` 组件保存/恢复角色资源，B 通过官方 `singinginspiration` 保存/恢复灵感值；活动歌曲、非零 `battleborn` 或跟随者/宠物/已召唤实体存在时应得到明确拒绝，不得用空表继续。当前 live TestMode Profile 只验证已支持的 Capture/Clean/Restore 安全子集，不把合成诊断中的临时物品、技能、能力和移动速度当作真实玩家已应用。
+
 1. 客户端 A、B 作为两个 Participant 进入同一个 TestMode，分别修改背包、Stats、技能树、角色资源和外观；销毁 Instance 或断线后重连，逐项确认原始状态恢复，记录恢复前后物品 prefab/count、Stats、技能节点、资源值和角色 prefab。
 2. 客户端 A 进入 Spectator，确认它没有目标 Instance 的 Participant 或 PlayerSandbox transaction；只能看到白名单目标，不能执行 gameplay action；退出后回到 Lobby 的动态安全点。
 3. 触发 GHOST 策略，确认死亡者仍属于原 Instance，只能在该 Zone 安全边界内移动；不能写入另一个 Instance。

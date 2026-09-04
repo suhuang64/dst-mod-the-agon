@@ -4,6 +4,7 @@ local ScenePlans = require("agon/modes/test_mode/scene_plans")
 local TestModeDecisions = require("agon/modes/test_mode/decisions")
 local TestModeEffects = require("agon/modes/test_mode/effects")
 local PlayerProfile = require("agon/player/player_profile")
+local PlayerUtil = require("agon/player/adapters/util")
 local DeathPolicy = require("agon/player/death_policy")
 
 local TestModeRuntime = {}
@@ -38,6 +39,30 @@ local TEST_PLAYER_PROFILE = PlayerProfile.New(
     temporary_components = { "test_mode_rules" },
     metadata = { schema_version = 1, purpose = "wp7_sandbox_diagnostics" },
 })
+
+local function MakeLivePlayerProfile()
+    local profile = PlayerProfile.Copy(TEST_PLAYER_PROFILE)
+
+    -- 真实玩家本轮只验证已接线的角色状态 Capture/Clean/Restore。
+    -- 物品、技能、能力和临时组件仍由各自适配器拒绝未实现的 live mutation，
+    -- 因此不能把合成诊断 profile 原样套到真实玩家上。
+    profile.starting_items = {}
+    profile.skills = {}
+    profile.skill_points = nil
+    profile.skill_xp = nil
+    profile.skilltree_data = nil
+    profile.movement_speed = nil
+    profile.allowed_abilities = {}
+    profile.disabled_abilities = {}
+    profile.temporary_components = {}
+    profile.metadata =
+    {
+        schema_version = 1,
+        purpose = "wp10_live_character_adapter",
+        source_profile = "TEST_MODE_PLAYER",
+    }
+    return profile
+end
 
 local function AttachMethods(runtime)
     runtime.OnPrepare = TestModeRuntime.OnPrepare
@@ -106,6 +131,12 @@ end
 function TestModeRuntime.GetPlayerProfile(self, participant)
     if participant == nil or TEST_PLAYER_PROFILE == nil then
         return nil
+    end
+    local player = type(participant.GetPlayer) == "function"
+        and participant:GetPlayer()
+        or nil
+    if player ~= nil and not PlayerUtil.IsSyntheticPlayer(player) then
+        return MakeLivePlayerProfile()
     end
     return PlayerProfile.Copy(TEST_PLAYER_PROFILE)
 end

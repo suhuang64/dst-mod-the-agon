@@ -882,6 +882,18 @@ PlayerProfile 可以声明基础三维、移动速度、初始装备、技能树
 
 尚未适配且无法保证恢复的角色，可以停留在大厅，但必须拒绝其进入匹配。
 
+#### 6.3.1 当前真实角色适配范围
+
+WP10 的真实玩家验收先采用显式、可审计的角色白名单，不把未知角色转换成空快照：
+
+- 当前只接入官方 `wilson` 和 `wathgrithr`；两者之外的真实角色继续返回不支持并停留在大厅。
+- `wilson` 通过官方 `beard:OnSave/OnLoad` 保存胡须资源；本轮 Profile 的外观策略为 `PRESERVE`，清理阶段不清零外观。
+- `wathgrithr` 通过官方 `singinginspiration:OnSave/OnLoad` 保存灵感值；存在活动歌曲或非零 `battleborn` 时，因为外部效果/临时值尚未有完整清理契约，直接拒绝进入。
+- 角色存在非空 `leader.followers`、虚拟 `itemfollowers`、`petleash.pets` 或已召唤的 `ghostlybond.ghost` 时直接拒绝；不序列化实体引用，也不猜测如何重建关系。
+- TestMode 的合成诊断 Profile 仍保留完整统一规格；真实玩家本轮只使用已经由 live adapters 支持的安全子集，暂不宣称真实客户端已应用统一临时物品、技能、能力或移动速度。
+
+该范围是安全的增量接线，而不是关闭 Character Adapter 安全门。新增角色或扩大真实 Profile 前，必须先补齐官方组件的 capture、clean、restore 和逐字段验证证据。
+
 #### WP10 真实玩家验收开关
 
 PlayerSandbox 的真实玩家 live mutation 默认必须关闭。WP10 允许通过一个只用于

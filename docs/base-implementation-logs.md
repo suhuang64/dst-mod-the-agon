@@ -1056,3 +1056,55 @@ docs(base): 修正执行日志文件名
 - 结论：两名真实玩家均已完成官方 `PostActivateHandshake`，`SKILLTREE_HANDSHAKE_REQUIRED` 不是客户端握手失败；此前 Runtime 使用玩家实体监听，但没有收到/处理 `ms_skilltreeinitialized`，因此项目诊断标志和完成日志未出现。
 - 修复：将握手监听改为官方组件采用的 `TheWorld:ListenForEvent("ms_skilltreeinitialized", callback, player)` 玩家 source 形式，并在 `playeractivated` 与既有 `ms_playerjoined` 生命周期中重复确保 `OnPlayerAdded` 接线；玩家离开时移除 source listener。仍保留官方 READY 即时检查和原恢复重试逻辑。
 - 本轮没有创建 Instance，也没有绕过官方 READY 硬门；下一轮重启 Test/World01 后先确认两条 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3`，再继续真实玩家绑定。
+
+### 1.47 2026-09-04：第一名真实玩家握手接线验证通过
+
+- 重启 Test/World01 后，服务端出现 `[TheAgon] [SKILLTREE_HANDSHAKE_COMPLETE] shard_id=1 userid=KU_0vPtVpg3 operation=skilltree_handshake handshake_state=3 character_prefab=wilson`。
+- 该结果证明新的 `TheWorld + player source` 官方事件接线已在真实专服中触发并通过 READY 校验；当前只收到 `KU_0vPtVpg3` 的完成证据，`KU_aUxMQjy7` 尚未计入通过。
+- 本轮尚未创建或绑定 Instance；下一步继续确认第二名真实玩家也出现 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3`。
+
+### 1.48 2026-09-04：两名真实玩家官方 SkillTree 握手均验证通过
+
+- 服务端随后出现 `SKILLTREE_HANDSHAKE_COMPLETE ... userid=KU_aUxMQjy7 ... handshake_state=3 character_prefab=wathgrithr`；结合 1.47 的 `KU_0vPtVpg3 ... handshake_state=3 character_prefab=wilson`，两名真实玩家均完成官方 `PostActivateHandshake`。
+- 本项 PASS：新的官方握手事件接线、READY 校验和进程内诊断标志已在两个真实客户端上生效。`skilltree.save_enabled=false` 不影响该结论，仍按官方客户端激活状态处理。
+- 本轮尚未创建或绑定 Instance。由于服务端重启后 live player test 开关默认关闭，下一步由管理员在两个玩家仍在线时执行 `/agon.test.player_sandbox on` 并查询 `status`，确认 `enabled=true eligible=true` 后再创建 Instance。
+
+### 1.49 2026-09-04：真实玩家沙箱测试开关重新开启并通过资格校验
+
+- 管理员客户端 `KU_aUxMQjy7` 执行 `/agon.test.player_sandbox on`；服务端记录 `PLAYER_TEST_ENABLED`。
+- 随后执行 `/agon.test.player_sandbox status`；服务端记录 `PLAYER_TEST_STATUS ... enabled=true eligible=true code=nil`。
+- 本项 PASS：重启后的当前进程已重新开启真实玩家 `TEST_MODE` 测试权限，且 Test/World01 资格校验通过。下一步只创建 `TEST_MODE` Instance，创建结果确认后再执行真实玩家绑定。
+
+### 1.50 2026-09-04：真实 TEST_MODE Instance 创建通过
+
+- 管理员执行受控 `CreateInstance("TEST_MODE", { "KU_0vPtVpg3", "KU_aUxMQjy7" })`。
+- 服务端返回 `WP10_INSTANCE_CREATE:agon:1:1:zone=small_01`，说明当前 Test/World01 的 `TEST_MODE` Instance 已成功创建并占用 `small_01`。
+- 本项只证明 Instance/Zone 创建通过，尚未证明玩家绑定、状态沙箱或 UI；下一步先单独绑定 `KU_0vPtVpg3`，确认结果后再绑定 `KU_aUxMQjy7`。
+
+### 1.51 2026-09-04：真实玩家绑定在角色状态适配器安全门处拒绝
+
+- 绑定 `KU_0vPtVpg3` 到 `agon:1:1` 时返回 `WP10_ATTACH_A:false:CHARACTER_LIVE_STATE_UNSUPPORTED`。官方 SkillTree 握手此前已为 READY，因此本次失败不属于握手问题。
+- 失败发生在 PlayerSandbox Capture 的默认 Character Adapter：真实玩家没有项目定义的可验证 `agon_sandbox_character_state`，适配器按设计拒绝猜测/清空/恢复角色专属资源；没有进入清理、Profile 应用或实际 live mutation。
+- 当前 Instance `agon:1:1` 为失败测试残留，需先用正式 `DestroyInstance("agon:1:1", "wp10_character_live_state_unsupported")` 清理。之后若要继续真实玩家测试，必须先实现并验证明确的角色状态适配器（至少覆盖本轮使用的 `wilson`/`wathgrithr`），不能通过注入空表或关闭安全门代替。
+
+### 1.52 2026-09-04：开始实现两角色真实 Character Adapter
+
+- 维护者选择“实现两角色”：本轮真实 live adapter 只覆盖官方 `wilson` 和 `wathgrithr`，不扩展到未知角色，也不通过注入 `agon_sandbox_character_state` 空表绕过安全门。
+- `scripts/agon/player/adapters/characters/default.lua` 现在使用官方组件的纯数据保存契约：`wilson` 调用 `beard:OnSave/OnLoad`，`wathgrithr` 调用 `singinginspiration:OnSave/OnLoad`；`wathgrithr` 的非零 `battleborn`、活动歌曲，以及 `leader.followers`、`leader.itemfollowers`、`petleash.pets`、`ghostlybond.ghost` 非空时拒绝进入，因为当前没有完整的外部实体/效果清理与恢复契约。
+- `EnterCleanState` 对 `wilson` 保留官方外观胡须；对 `wathgrithr` 仅将已验证可安全处理的灵感值清零。`Restore`/`ValidateRestore` 重新调用官方组件接口并比较纯数据结果，不写入项目自定义 live 状态字段。
+- `scripts/agon/modes/test_mode/runtime.lua` 对真实玩家返回 live-safe Profile：初始物品、技能、技能点/编码、移动速度、允许/禁用能力和临时组件均不下发；合成 WP7 诊断仍保留完整 `TEST_MODE_PLAYER` Profile。该项只为验证真实角色 Capture/Clean/Restore，不宣称真实统一能力已经通过。
+- 采用该范围的原因是：此前 `WP10_ATTACH_A:false:CHARACTER_LIVE_STATE_UNSUPPORTED` 已证明通用默认适配器没有合法 live 来源；扩大成“接受但不保存”会造成真实玩家数据丢失风险。实现后必须先做静态检查，再由维护者清理 `agon:1:1`、重启并重新逐步绑定 A/B。
+- 本条是代码/设计变更记录，尚未计为服务端运行 PASS；也尚未进行新的重启、真实绑定或恢复验证。
+
+### 1.53 2026-09-04：两角色适配器静态复核完成，等待实服加载
+
+- 静态变更文件为 `scripts/agon/player/adapters/characters/default.lua`、`scripts/agon/modes/test_mode/runtime.lua` 及对应的 design/plan/acceptance/log 文档；没有修改 `D:\OneDrive\DST\scripts` 官方源码。
+- `git diff --check` 通过；检查确认 Character Adapter 已删除对 `agon_sandbox_character_state` 的 live 依赖；官方源码中 `beard:OnSave/OnLoad`、`singinginspiration:OnSave/OnLoad` 和 `battleborn` 字段均已逐项核对。
+- PATH 中仍没有 `lua`、`luac` 或 `stylua`，没有全局安装解析器；独立 Lua parser 检查未执行。必须以官方专服重启后的模块加载和真实调用作为运行时兼容验证。
+- 当前工作树尚未提交；建议中文 Conventional Commit：`fix(sandbox): 接入两角色真实状态安全适配`。
+- 下一步由维护者在当前专服执行 `DestroyInstance("agon:1:1", "wp10_character_adapter_cleanup")`，确认 `INSTANCE_DESTROYED` 后重启 `Test/World01`。重启后先确认两个 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3`，再开启 `/agon.test.player_sandbox on`，最后只绑定 A=`KU_0vPtVpg3`（`wilson`），等待本轮结果后再绑定 B。
+
+### 1.54 2026-09-04：两角色适配器测试残留清理通过
+
+- 维护者执行 `DestroyInstance("agon:1:1", "wp10_character_adapter_cleanup")`，服务端返回 `WP10_CHARACTER_ADAPTER_CLEANUP:true:INSTANCE_DESTROYED`。
+- 本项 PASS：失败绑定产生的 `agon:1:1` 已通过正式 Instance 销毁 pipeline 清理，后续可在同一 `Test/World01` 重启后重新测试；尚未把角色 Capture/Restore 计为通过。
