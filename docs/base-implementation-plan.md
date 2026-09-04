@@ -1287,6 +1287,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 已补齐上述两条接线：客户端 Spectator 通过 classified `agon_spectator_active` 绕过官方 `DoCameraControl()` 的 disabled 早退但不恢复 gameplay input；InstanceManager 在初始启动和运行中重连时按 `ScenePlan.participant_spawn_points` 移动真实 Participant，并由 Attach 清理大厅会话。重启后的真实双客户端验证仍未完成。
 - 2026-09-04 真实客户端复测确认：A 不能操作人物、相机旋转/缩放正常；初版 `camera=FOLLOW` 未实现 A 的位置持续同步到目标 B。上一版临时 classified/FocalPoint 相机接线已撤销，改为服务端 SpectatorService 周期性同步 A 的真实 Transform 到 B，静态检查和真实重启后的双客户端复测仍待完成。
 - 2026-09-05 根据维护者明确要求强化 Spectator 语义：A 不是“只隐藏的视觉对象”，必须对怪物目标、普通/绕过无敌的伤害、碰撞、拾取/交易/喂食/施法、诅咒、溺水、燃烧、冻结和生存值变化均无效。已在运行时 guard 增加官方排除标签、组件级阻断包装、ActionFilter、周期性保护重置；退出时恢复原组件方法、属性、标签和显示状态，真实服务端/双客户端验证待执行。
+- 2026-09-05 `RecoverOrphanedZone("small_01", "agon:1:1", ...)` 返回 `ZONE_NOT_EMPTY` 后，真实服务端只读枚举确认残留为 `flower`、`wintersfeastfuel` 和带 B userid 的 `skeleton_player`。官方 `skeleton_player` 是死亡尸体而非在线玩家；已修正 SceneService 的占用保护判定，仅以 `player` 标签或 `playercontroller` 组件拦截活跃玩家，使受控恢复可清理尸体而不会误删在线玩家。
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。

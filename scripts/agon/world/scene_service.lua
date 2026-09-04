@@ -132,7 +132,11 @@ local function IsPlayerEntity(entity)
     if entity == nil then
         return false
     end
-    if IsNonEmptyString(entity.userid) or HasTag(entity, "player") then
+    -- `skeleton_player` keeps the dead player's userid for corpse metadata,
+    -- but it is not a live player entity and must remain removable during
+    -- controlled scene/orphan recovery. Only the live player tag or the
+    -- playercontroller component is a sufficient occupancy guard.
+    if HasTag(entity, "player") then
         return true
     end
     return entity.components ~= nil and entity.components.playercontroller ~= nil

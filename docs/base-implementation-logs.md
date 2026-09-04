@@ -1980,3 +1980,38 @@ docs(base): 修正执行日志文件名
 - 额外修正了无 guard 清理时遗留 `agon_spectator_guard_mode` 的问题，并将读取目标 Participant 包装为 protected call，避免断线/销毁竞态直接抛错；周期跟随继续在目标暂时不可用时保持 A 的最后安全位置。
 - 静态收口：`git diff --check` 通过（仅 Git 报告 LF/CRLF 转换提示）；`rg` 确认源码不再引用已撤销的 `TheFocalPoint`/FOLLOW source 或临时 classified target 字段；当前环境没有 `lua`、`luac`、`luajit`、`stylua`、`selene`，未全局安装工具，因此 Lua 解析和真实行为仍必须由官方 `Test/World01` 重启后的实服测试完成。
 - 下一步实服验收顺序：重启加载新 Lua → 开启 live player test → 创建 B-only Instance 并启动 → A 进入 FOLLOW 观战 → 移动 B 验证 A 的真实位置/官方相机同步 → 以怪物、伤害、普通交互分别验证 A 不受影响 → A 退出并确认 guard、位置、组件、Zone、Instance、恢复队列全部清理。维护者返回的每次结果继续追加本文件。
+
+### 3.13 2026-09-05：新硬隔离版本重启后发现上一轮测试遗留恢复状态
+
+- 维护者重启官方 `Test/World01` 后，新进程已输出 `STARTED`、`LAYOUT_READY` 和 `CORE_READY`，说明新 Lua 已加载；本次 `CORE_READY` 为 `instance_count=0`、`zone_count=10`、`free_zone_count=9`。
+- `RECOVERY_PARTIAL` 返回 `aborted_instance_count=1`、`pending_restore_count=1`、`quarantined_zone_count=1`。这是上一次真实测试中止的 `agon:1:1` 遗留恢复队列和隔离 Zone，必须先收口，不能直接开始新的 Spectator 验收。
+- B=`KU_aUxMQjy7` 先记录 `SKILLTREE_HANDSHAKE_REQUIRED`，随后官方握手完成并记录 `handshake_state=3`，但自动恢复仍返回 `SURVIVAL_STATS_RESTORE_MISMATCH`；A=`KU_UR8pbyho` 已完成 `handshake_state=3`。该恢复阻断属于既有快照/重连时序的待处理状态，不是本轮硬隔离代码的运行失败。
+- 下一步按受控顺序执行：先读取恢复队列和 `small_01` 的实际 owner；确认 B 已握手后对 B 执行 `Runtime:RetryRestore()`；再对匹配 owner 的 `QUARANTINED small_01` 执行 `RecoverOrphanedZone()`；最后确认 `ValidateCore=true`、`free_zone_count=10`、`pending_restore_count=0` 后，才开启 live player test 并创建新的 B-only Instance。
+
+### 3.14 2026-09-05：遗留恢复队列和隔离 Zone 定位完成
+
+- 维护者执行恢复/Zone 只读诊断；Runtime Debug 返回 `pending_restore_count=1`、`restore_queue entries=1 pending=1 blocked=1`，Backend 为 `records=0 pending=0 submitted=0 transport=not_configured`。
+- Zone Debug 确认 `small_01` 为唯一非 FREE Zone：`state=QUARANTINED owner=agon:1:1 reservation_generation=4`；其余 9 个 Zone 均为 `FREE owner=nil`。Runtime 基线为 `instances=0 zones=10 restores=1 backend_pending=0 errors=2 live_player_test=off`。
+- 结合重启日志，B=`KU_aUxMQjy7` 已从 `SKILLTREE_HANDSHAKE_REQUIRED` 进入官方 `handshake_state=3`，但恢复仍被 `SURVIVAL_STATS_RESTORE_MISMATCH` 阻断；A=`KU_UR8pbyho` 已完成握手。当前先对 B 执行受控 `Runtime:RetryRestore()`，成功后再以匹配 owner `agon:1:1` 执行 `RecoverOrphanedZone("small_01", "agon:1:1", ...)`。
+
+### 3.15 2026-09-05：B 的跨重启恢复重试通过
+
+- 维护者对 B=`KU_aUxMQjy7` 执行受控 `Runtime:RetryRestore()`；服务端公告 `WP10_RESTORE_B_RETRY:true:nil`。
+- 该结果确认 B 在官方握手完成后可以完成原 PlayerSandbox 恢复；下一步处理仍遗留的 `small_01` `QUARANTINED` Zone，使用已确认的 owner `agon:1:1`，不直接改写 Zone 状态。
+
+### 3.16 2026-09-05：孤立 Zone 受控恢复被残留实体阻断
+
+- 维护者执行 `RecoverOrphanedZone("small_01", "agon:1:1", ...)` 后，服务端公告 `WP10_ORPHAN_ZONE_RECOVERY:false:ZONE_NOT_EMPTY`。
+- 受控恢复按预期安全拒绝：`small_01` 没有被强制释放，仍需先定位 Zone 硬边界内的残留实体，并区分在线玩家、有效非玩家实体和无效/残留对象；在完成只读诊断前不重复恢复、不删除实体、不创建新 Instance。
+- 下一步通过已接线的 `TerrainService:FindOccupants(zone.hard_bounds)` 做只读枚举，记录 GUID、prefab、userid、位置、玩家标志和有效性，再决定最小范围清理路径。
+
+### 3.17 2026-09-05：定位到 B 关联的残留 skeleton_player
+
+- 维护者执行只读 Occupant 枚举；`small_01` 当前有 3 个有效对象：`guid=100039 prefab=flower`、`guid=100043 prefab=wintersfeastfuel`，以及 `guid=100051 prefab=skeleton_player userid=KU_aUxMQjy7`。
+- `flower` 和 `wintersfeastfuel` 属于可由受控恢复流程清理的非玩家实体；`skeleton_player` 带有 B 的 userid，因此被 `IsPlayerEntity` 安全识别为玩家关联对象并阻止 Zone 恢复。下一步先只读确认 B 的当前在线实体/位置与该 skeleton 的有效性和分离状态，不能直接把它当普通实体删除。
+
+### 3.18 2026-09-05：修正恢复流程对死亡尸体的误判
+
+- 结合官方只读源码确认：`scripts/prefabs/skeleton.lua` 中的 `skeleton_player` 是死亡尸体，保留 userid 仅用于尸体描述/存档，并使用 `playerskeleton` 标签；在线角色由 `player` 标签和 `playercontroller` 组件标识。
+- 根因是 SceneService 原先只要发现实体存在 userid 就返回 `ZONE_NOT_EMPTY`，导致死亡尸体被误当成在线玩家。已最小修改 `scripts/agon/world/scene_service.lua`：`IsPlayerEntity` 现在只拦截 `player` 标签或 `playercontroller` 组件，保留对真实在线玩家的保护并允许受控恢复清理尸体。
+- 该修复尚未加载到当前服务进程；下一步必须重启官方 `Test/World01`，确认恢复队列/匹配隔离 Zone 后，再执行受控 `RecoverOrphanedZone`，不得手动强制改写 Zone 状态。
