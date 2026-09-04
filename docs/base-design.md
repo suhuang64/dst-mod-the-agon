@@ -296,6 +296,9 @@ TheWorld.minimap.MiniMap:RebuildLayer(...)
 Stop gameplay
 → Close child Scopes and cancel tasks/listeners/effects
 → Remove all Instance-owned entities
+→ Enumerate hard_bounds residual occupants
+→ Reject live players; remove only non-player residual entities
+→ Re-enumerate and require the Zone to be empty
 → Set every tile in Zone hard_bounds to WORLD_TILES.IMPASSABLE
 → Rebuild world/minimap layers
 → Validate no ground and no managed entity remain

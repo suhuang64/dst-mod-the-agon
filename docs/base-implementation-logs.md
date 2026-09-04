@@ -2015,3 +2015,214 @@ docs(base): 修正执行日志文件名
 - 结合官方只读源码确认：`scripts/prefabs/skeleton.lua` 中的 `skeleton_player` 是死亡尸体，保留 userid 仅用于尸体描述/存档，并使用 `playerskeleton` 标签；在线角色由 `player` 标签和 `playercontroller` 组件标识。
 - 根因是 SceneService 原先只要发现实体存在 userid 就返回 `ZONE_NOT_EMPTY`，导致死亡尸体被误当成在线玩家。已最小修改 `scripts/agon/world/scene_service.lua`：`IsPlayerEntity` 现在只拦截 `player` 标签或 `playercontroller` 组件，保留对真实在线玩家的保护并允许受控恢复清理尸体。
 - 该修复尚未加载到当前服务进程；下一步必须重启官方 `Test/World01`，确认恢复队列/匹配隔离 Zone 后，再执行受控 `RecoverOrphanedZone`，不得手动强制改写 Zone 状态。
+
+### 3.19 2026-09-05：死亡尸体误判修复后的孤立 Zone 恢复通过
+
+- 维护者在重启加载修复后执行受控 `RecoverOrphanedZone("small_01", "agon:1:1", ...)`；服务端公告 `WP10_ORPHAN_ZONE_RECOVERY_AFTER_FIX:true:ZONE_RECOVERED`。
+- 该结果确认恢复流程已正确清理 `flower`、`wintersfeastfuel` 和 `skeleton_player` 残留，并完成 `QUARANTINED → RESETTING → FREE` 的安全收口；真实在线玩家仍由 `player` 标签/`playercontroller` 保护，不会被该流程误删。
+- 下一步只读核验 `ValidateCore`、Instance 数量、Zone 全部 FREE、恢复队列和 Backend 队列，确认环境回到可开始新一轮 Spectator 硬隔离测试的基线。
+
+### 3.20 2026-09-05：孤立恢复后的测试基线核验通过
+
+- 维护者执行最终只读核验；服务端公告 `WP10_RECOVERY_FINAL:true:nil:schema=1 shard=1 boot=8 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=0 backend_pending=0 errors=2 live_player_test=off test_context=eligible`。
+- 详细 Debug 同时确认 10 个 Zone 全部 `state=FREE owner=nil`，`RESTORE_COMPLETE pending=0 blocked=0`，`BACKEND_PENDING records=0 pending=0 submitted=0`；`errors=2` 仅为历史诊断记录，当前核心状态仍为 READY。
+- 官方 SkillTree 日志确认 A=`KU_UR8pbyho` 已完成 `handshake_state=3`。环境已回到可开始新的真实 Spectator 硬隔离验收基线；下一步开启 live player test 后创建新的 B-only Instance。
+
+### 3.21 2026-09-05：真实玩家测试开关重新开启
+
+- 维护者在管理员客户端执行 `agon.test.player_sandbox on`；服务端公告 `PLAYER_TEST_ENABLED shard_id=1 userid=KU_aUxMQjy7 operation=live_player_test_on`。
+- live player test 已开启，仅对后续新建的 TestMode Instance 生效；当前仍无活动 Instance，下一步创建 B=`KU_aUxMQjy7` 的 B-only Instance，再按 Attach → Start 顺序推进硬隔离验收。
+
+### 3.22 2026-09-05：B-only 测试 Instance 创建成功
+
+- 维护者创建 B=`KU_aUxMQjy7` 的 TestMode Instance；服务端公告 `WP10_INSTANCE_CREATE:agon:1:2:zone=small_01`。
+- 当前 Instance `agon:1:2` 已分配 `small_01`，尚未 Attach 或 Start；下一步只绑定 B 并检查其 PlayerSandbox 状态。
+
+### 3.23 2026-09-05：B 成功绑定到 B-only Instance
+
+- 维护者执行 B=`KU_aUxMQjy7` 的 `AttachPlayer`；服务端公告 `WP10_ATTACH_B:true:nil`。
+- `agon:1:2` 的 B Participant 绑定调用成功；下一步只读确认 Participant/沙箱/大厅状态，再执行 Instance Start。
+
+### 3.24 2026-09-05：B-only Attach 结果确认
+
+- 维护者返回 `WP10_ATTACH_B:true:nil`，确认 `agon:1:2` 的 B=`KU_aUxMQjy7` 已成功绑定。
+- 当前仍未启动 Instance；下一步核验 B 的 Participant state、Sandbox transaction、player reference 和 Lobby session，再执行 Start。
+
+### 3.25 2026-09-05：B-only Attach 状态核验通过
+
+- 维护者执行只读 Attach 诊断；服务端公告 `WP10_ATTACH_B_DIAG:participant=true:state=READY:player_ref=true:tx=agon:1:2:sandbox:1:lobby=false:prefab=wathgrithr`。
+- B 的 Participant、Sandbox、在线实体引用和大厅清理均符合预期；当前 Instance 尚未启动，下一步执行 `Start("agon:1:2")` 并核对场景出生位置。
+
+### 3.26 2026-09-05：B-only Instance 启动成功
+
+- 维护者执行 `StartInstance("agon:1:2", "wp10_start_b_only")`；服务端公告 `WP10_START_B:true:nil`。
+- B-only Instance 已进入启动后的场景核验阶段；下一步确认 B 已脱离 Lobby 并位于 ScenePlan 的 participant spawn tile。
+
+### 3.27 2026-09-05：B-only Start 结果确认
+
+- 维护者返回 `WP10_START_B:true:nil`，确认 `agon:1:2` 已成功启动；下一步只读核对 Instance 运行态、B 的场景位置和 Lobby 状态。
+
+### 3.28 2026-09-05：B-only 场景出生与大厅隔离核验通过
+
+- 维护者执行只读 Start 诊断；服务端公告 `WP10_START_B_DIAG:instance=RUNNING:state=READY:lobby=false:tile=42,265:expected=42,265:pos=-632,260`。
+- B 已正确进入运行中的 `agon:1:2`，真实位置与 ScenePlan 出生 Tile 一致，并已脱离 Lobby；下一步让 A=`KU_UR8pbyho` 建立 Spectator FOLLOW 会话。
+
+### 3.29 2026-09-05：A 成功进入 Spectator FOLLOW
+
+- 维护者让 A=`KU_UR8pbyho` 进入 `agon:1:2` 观战 B=`KU_aUxMQjy7`；服务端公告 `WP10_SPECTATOR_ENTER:state=SPECTATING:instance=agon:1:2:target=KU_aUxMQjy7:echo=agon:echo:1:anchor=1`。
+- Spectator 会话和唯一 Echo 已创建；下一步只读检查 A 的 Participant 排除、Lobby/Spectator 状态、硬隔离 guard、Physics 和 A/B 实时位置同步。
+
+### 3.30 2026-09-05：Spectator 硬隔离基线与初始 FOLLOW 同步通过
+
+- 维护者执行只读状态诊断；服务端公告 `WP10_SPECTATOR_STATE_DIAG:state=SPECTATING:instance=agon:1:2:target=KU_aUxMQjy7:echo=agon:echo:1:participant=false:lobby=true:guard=HARD_NONINTERACTIVE_FOLLOW:guard_applied=true:physics_active=nil:pos_a=-632,260:pos_b=-632,260:delta=0,0:tags=true/true/true/true/true`。
+- A 的 Spectator 会话、Participant 排除、guard 和目标排除标签均通过，初始真实位置已与 B 对齐。`lobby=true` 是 A 保留的观战返回会话；`physics_active=nil` 仅表示官方 Physics 没有可读 `IsActive()` 接口，不能据此判定碰撞开启，guard 已成功调用 `Physics:SetActive(false)`。
+- 下一步由 B 在客户端实际移动，再执行位置诊断确认 A 的真实 Transform 持续追随 B，并观察 A 的官方相机是否随人物自动更新。
+
+### 3.31 2026-09-05：B 移动后的 A 实时 FOLLOW 同步通过
+
+- 维护者让 B 移动后执行只读位置诊断；服务端公告 `WP10_FOLLOW_MOVE_DIAG:state=SPECTATING:pos_a=-619.68072509766,248.60586547852:pos_b=-619.68072509766,248.60586547852:delta=0,0`。
+- B 移动后的 A/B 真实 Transform 仍完全一致，服务端实时 FOLLOW 通过；客户端画面是否随 A 的官方相机自动更新仍需维护者结合实际画面确认。
+- 下一步测试 A 的 Health 普通伤害和绕过无敌的死亡入口，确认硬隔离不仅隐藏/无碰撞，也不会被直接 gameplay 入口改变状态。
+
+### 3.32 2026-09-05：维护者确认 FOLLOW 移动诊断结果
+
+- 维护者再次返回 `WP10_FOLLOW_MOVE_DIAG:state=SPECTATING:pos_a=-619.68072509766,248.60586547852:pos_b=-619.68072509766,248.60586547852:delta=0,0`。
+- A 与 B 的实时服务器坐标仍完全一致，确认 FOLLOW 不是只在进入观战时定位；客户端画面是否随 A 的官方相机自动更新仍待实际画面确认。
+- 下一步执行 A 的 Health 普通伤害入口测试。
+
+### 3.33 2026-09-05：A 的 Health 普通伤害硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的 Health 普通伤害诊断；服务端公告 `WP10_HEALTH_GUARD_DIAG:before=37.5:after=37.5:delta=0:call_result=0:invincible=true:ghost=false`。
+- 直接 `DoDelta(-25, ...)` 未改变生命值，调用被硬隔离拦截；A 仍保持无敌且不是鬼魂，普通伤害入口通过。
+- 下一步测试 Health 的 `ForceKill()` 死亡入口，确认绕过无敌参数的强制死亡也不能改变 A 状态。
+
+### 3.34 2026-09-05：A 的 Health ForceKill 死亡入口硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的 `ForceKill()` 诊断；服务端公告 `WP10_FORCEKILL_GUARD_DIAG:before=37.5:after=37.5:delta=0:call_result=nil:ghost=false`。
+- 强制死亡调用被硬隔离拦截，生命值未改变且 A 未进入鬼魂状态；Health 死亡入口通过。
+- 下一步测试 Combat 的 `CanBeAttacked()` 与 `GetAttacked()` 入口。
+
+### 3.35 2026-09-05：A 的 Combat 受击入口硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的 Combat 受击诊断；服务端公告 `WP10_COMBAT_GUARD_DIAG:can_be_attacked=false:get_attacked=false:before=37.5:after=37.5:delta=0:ghost=false`。
+- A 不可被判定为可攻击目标，直接 `GetAttacked` 调用被拦截，生命值和鬼魂状态均未改变；Combat 受击入口通过。
+- 下一步测试 A 的攻击与选目标入口，确认观战实体不会主动攻击或锁定目标。
+
+### 3.36 2026-09-05：A 的 Combat 主动攻击与选目标入口硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的 Combat 主动行为诊断；服务端公告 `WP10_COMBAT_OUTBOUND_GUARD_DIAG:set_target=nil:do_attack=nil:try_attack=false:force_attack=false:start_attack=nil:target_before=nil:target_after=nil`。
+- `SetTarget`、`DoAttack`、`StartAttack` 未建立目标或产生攻击；`TryAttack` 与 `ForceAttack` 均被拦截返回 `false`，A 的目标前后均为空。
+- 下一步测试 PlayerActionPicker 交互入口，确认观战实体不会执行普通玩家动作。
+
+### 3.37 2026-09-05：A 的 PlayerActionPicker 交互过滤通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的 PlayerActionPicker 诊断；服务端公告 `WP10_ACTION_GUARD_DIAG:filter_active=true:walk_actions=0`。
+- 观战动作过滤器处于活动状态，模拟的普通 `WALKTO` 动作被完全过滤；A 不会通过 PlayerActionPicker 执行普通玩家交互。
+- 下一步测试交易、进食和 Debuff 三类直接交互组件入口。
+
+### 3.38 2026-09-05：A 的交易、进食与 Debuff 交互入口硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的交易、进食和 Debuff 组件诊断；服务端公告 `WP10_INTERACTION_GUARD_DIAG:able_to_accept=false:wants_to_accept=false:accept_gift=false:can_eat=false:eat=false:add_debuff=false`。
+- 交易接受、进食判断/执行和 Debuff 添加均被硬隔离拦截；A 不会通过这些组件参与交互。
+- 下一步测试溺水、燃烧、冻结和雷击等环境伤害入口。
+
+### 3.39 2026-09-05：A 的环境伤害入口硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的环境伤害诊断；服务端公告 `WP10_ENV_GUARD_DIAG:fire=0:drown=false:ignite=nil:cold=nil:freeze=nil:lightning=nil:health_delta=0:ghost=false`。
+- 火焰伤害调用返回 `0`，溺水、燃烧、冻结和雷击入口均未改变生命值或鬼魂状态；环境伤害入口通过。
+- 下一步测试 Hunger、Sanity、Temperature 和 Moisture 的状态变更入口。
+
+### 3.40 2026-09-05：A 的 Hunger、Sanity、Temperature、Moisture 状态入口硬隔离通过
+
+- 维护者执行 A=`KU_UR8pbyho` 的持续状态变更诊断；服务端公告 `WP10_STATUS_GUARD_DIAG:hunger=nil:sanity=nil:temperature=nil:moisture=nil:hunger_delta=0:sanity_delta=0:temperature_delta=0:moisture_delta=0`。
+- 四类状态变更调用均未改变对应数值；持续生存状态入口通过。
+- 脚本层直接 gameplay 入口测试已覆盖 Health、Combat、PlayerActionPicker、交易、进食、Debuff、环境伤害和持续状态；下一步只读确认守卫仍保持有效，并进行客户端可见性、无碰撞、不可操作及 FOLLOW 画面观察。
+
+### 3.41 2026-09-05：Spectator 守卫最终诊断部分通过，两个服务端只读查询不可用
+
+- 维护者执行最终守卫诊断；服务端公告 `WP10_GUARD_FINAL_DIAG:state=SPECTATING:guard=HARD_NONINTERACTIVE_FOLLOW:guard_applied=true:visible=nil:controller=nil:filter=true:tags=true/true/true/true/true/true/true/true/true:delta=0,0`。
+- Spectator 状态、硬守卫、动作过滤、全部保护标签和 A/B 实时位置同步均通过；`visible=nil` 与 `controller=nil` 表示当前服务端对象未提供对应的直接只读 accessor，不能据此判定隐藏或控制器状态失败。
+- 下一步使用 `Hide`/`Enable` 方法存在性与控制器 classified 网络变量进行补充确认；若仍无法读取可见性，则必须以真实客户端画面确认隐藏、无碰撞、不可操作及 FOLLOW。
+
+### 3.42 2026-09-05：Spectator 隐藏与控制器底层状态确认通过
+
+- 维护者执行底层 accessor/网络变量诊断；服务端公告 `WP10_GUARD_ACCESSOR_DIAG:hide_method=true:visible_accessor=true:visible=false:enable_method=true:controller_accessor=true:controller=false:controller_net=false:physics_setactive=true:filter=true`。
+- 服务端可读的隐藏状态为 `visible=false`，PlayerController accessor 与 classified 网络变量均为 `false`；Hide、Enable、Physics.SetActive 和动作过滤器均可用且已由守卫流程应用。
+- 服务端硬隔离验证完成；下一步进行真实客户端画面确认：A 隐身、无碰撞、不可移动/攻击/交互，且 A 的官方相机随 B 的移动自动跟随。
+
+### 3.43 2026-09-05：Spectator 客户端隐身与官方相机 FOLLOW 确认通过
+
+- 维护者确认真实客户端画面符合预期：A 不可见，且 A 的官方相机会随 B 的移动自动更新。
+- 观战目标跟随不依赖 FocalPoint 或独立镜头切换，A 的真实位置跟随 B 后由官方相机自然跟随；客户端画面验证通过。
+- 下一步让 B 暂停移动，仅测试 A 的移动输入是否被完全禁止。
+
+### 3.44 2026-09-05：A 的客户端移动输入未改变服务器位置
+
+- 维护者让 B 保持不动并让 A 执行移动输入；服务端公告 `WP10_MOVE_INPUT_DIAG:state=SPECTATING:controller=nil:pos_a=-620.55517578125,271.08905029297:pos_b=-620.55517578125,271.08905029297:delta=0,0`。
+- A 的服务器位置没有因客户端移动输入而偏离 B，FOLLOW 同步保持通过；本次命令中的 `controller=nil` 仅是直接 accessor 未返回值，不能覆盖此前 `controller=false/controller_net=false` 的底层确认。
+- 下一步让 A 执行一次攻击输入，确认客户端攻击请求不会产生攻击目标或 gameplay 行为。
+
+### 3.45 2026-09-05：A 的客户端攻击输入未对 B 造成伤害
+
+- 维护者让 A 执行攻击输入并确认 B 没有受到伤害；同时返回的移动诊断仍为 `delta=0,0`。
+- A 的客户端攻击没有产生可见的有效伤害结果；攻击状态的服务器只读诊断仍待补充执行。
+- 下一步执行攻击状态诊断，确认 A 没有建立攻击目标且仍保持 Spectator 状态。
+
+### 3.46 2026-09-05：A 的客户端攻击状态保持为无目标 Spectator
+
+- 维护者执行攻击状态诊断；服务端公告 `WP10_ATTACK_INPUT_DIAG:state=SPECTATING:target_set=false:try_attack_type=function:force_attack_type=function:ghost=false`。
+- A 仍处于 Spectator 状态，没有建立攻击目标，也没有进入鬼魂状态；客户端攻击输入验证通过。
+- 下一步测试 A 的右键交互/移动到目标请求，并确认不会产生 BufferedAction。
+
+### 3.47 2026-09-05：A 的客户端交互输入被完全拦截
+
+- 维护者让 A 执行右键交互/移动到目标请求，并执行服务器状态诊断；服务端公告 `WP10_INTERACTION_INPUT_DIAG:state=SPECTATING:controller_net=false:remote_action=false:remote_target=false:attack_buffer=false:ghost=false`。
+- A 没有移动、拾取、采集或动作动画；控制器网络变量为 `false`，没有远程交互或攻击缓冲；客户端交互输入验证通过。
+- 下一步使用临时真实怪物实体测试 A 是否能被怪物选为目标，测试实体将立即清理。
+
+### 3.48 2026-09-05：临时蜘蛛目标测试出现 CanTarget 运行时异常
+
+- 维护者执行临时 `spider` 的目标判定诊断；服务端公告 `WP10_MONSTER_TARGET_DIAG:prefab=spider:can_target_a=error:notarget=true:noplayertarget=true:removed=true`。
+- 蜘蛛实体已成功创建并清理，A 的 `notarget` 与 `noplayertarget` 标签均存在；但蜘蛛 `CanTarget(A)` 调用抛出运行时异常，不能把本次结果当作目标拒绝 PASS。
+- 下一步不再创建实体，先读取 `CanTarget` 的具体错误信息，确认是测试调用签名问题还是运行时代码问题。
+
+### 3.49 2026-09-05：准备读取怪物目标判定异常的具体错误
+
+- 由于上一条命令将 `pcall` 的错误内容压缩为 `error`，当前尚不能区分怪物 Combat 组件缺少 replica、目标参数不符合官方签名，还是其他运行时问题。
+- 下一条诊断只扫描附近已有实体；无现存怪物时回退调用 B 的原生 Combat `CanTarget(A)`，不生成新实体、不改变玩家状态。
+
+### 3.50 2026-09-05：真实 crawlinghorror 拒绝将 A 作为目标
+
+- 维护者执行附近真实怪物的目标判定诊断；服务端公告 `WP10_MONSTER_TARGET_DIAG_DETAIL:source=crawlinghorror:pcall=true:can_target_a=false:error=nil:notarget=true:noplayertarget=true`。
+- `crawlinghorror` 的原生 `CanTarget(A)` 成功返回 `false`，且 A 的目标排除标签均存在；真实怪物目标过滤通过，上一条异常属于测试调用/实体选择问题而非当前目标过滤失败。
+- 下一步验证无碰撞行为：让 B 连续移动，确认不会被隐身的 A 卡住、推开或阻挡，同时 A 继续保持与 B 的位置一致。
+
+### 3.51 2026-09-05：无碰撞 FOLLOW 服务器诊断支持通过，待维护者确认移动体感
+
+- 维护者执行无碰撞/FOLLOW 诊断；服务端公告 `WP10_COLLISION_FOLLOW_DIAG:state=SPECTATING:controller_net=false:physics_setactive_method=true:pos_delta=0,0`。
+- A 与 B 的服务器位置仍完全一致，控制器网络变量为 `false`，Physics 停用接口可用；但当前官方 Physics 对象没有可用的直接活动状态 accessor，因此该条只能作为服务器侧支持证据。
+- 最后需要维护者确认 B 实际移动过程中没有被卡住、推开或阻挡；确认后即可完成本轮 Spectator 硬隔离验收。
+
+### 3.52 2026-09-05：维护者确认 B 移动无碰撞阻挡
+
+- 维护者确认 B 移动过程中没有被 A 卡住、推开、弹开或阻挡。
+- 结合 Physics.SetActive 已应用、A/B 位置持续一致及实际移动体感，无碰撞行为通过。
+- 下一步清理当前 Spectator Instance，验证 A 的守卫、位置、控制器和保护标签均能恢复，且 Zone 正确释放。
+
+### 3.53 2026-09-05：Spectator Instance 清理因场景重置失败
+
+- 维护者执行 `DestroyInstance("agon:1:2", "wp10_spectator_final_cleanup")`；服务端公告 `WP10_SPECTATOR_CLEANUP:false:SCENE_RESET_FAILED`。
+- 当前 Instance、Spectator 会话和 Zone 不能视为已清理；本轮验收暂未完成，不能重启服务器或重复执行 Destroy 以免扩大残留状态。
+- 下一步只读枚举 `small_01` 场景中的现存实体，定位阻止 Scene Reset 的具体占用者，再执行针对性清理/恢复。
+
+### 3.54 2026-09-05：定位普通销毁的非玩家残留清理缺口并修复
+
+- 维护者执行只读占用诊断；`small_01` 中有 5 个有效非玩家实体：`meat`、两块 `turf_cave`、`yellowamulet` 和 `backpack`，没有玩家、`playercontroller` 或 `skeleton_player`。
+- 根因是 `SceneService.Reset` 只调用 `entity_registry:RemoveAll()`，没有清理未登记的场景残留；随后 `TerrainService.ClearZone` 的 `ValidateZoneCleared()` 发现占用者并返回 `ZONE_NOT_EMPTY`，上层映射为 `SCENE_RESET_FAILED`。
+- 已在 `scene_service.lua` 抽取安全的非玩家占用清理流程，并让正常 `Reset` 与 `RecoverSnapshot` 共用：发现活玩家时拒绝清理，非玩家实体移除后再次枚举确认为空，再继续地形重置。
+- 需要重新加载本次修改后，重新执行 Spectator 的创建、进入、FOLLOW/守卫诊断和销毁验收；本次旧实例的失败状态不作为修复后的结果。
+
+### 3.55 2026-09-05：非玩家残留清理修复静态校验通过，等待服务重载
+
+- `scene_service.lua` 已确认由正常 `Reset` 和 `RecoverSnapshot` 共用 `RemoveNonPlayerOccupants`；修改后的 `git diff --check` 通过，仅有仓库原有的 LF/CRLF 提示。
+- 当前运行中的服务尚未加载本次修改；不能在旧进程中重复销毁。下一步重启官方 `klei/DoNotStarveTogether/Test/World01`，启动完成后先回传 `CORE_READY`/恢复基线，再重新执行 Spectator 创建到清理的回归。

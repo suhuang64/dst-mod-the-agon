@@ -153,6 +153,32 @@ local function RemoveEntity(entity)
     return ok
 end
 
+local function RemoveNonPlayerOccupants(terrain, bounds)
+    local occupants, occupants_code = terrain:FindOccupants(bounds)
+    if occupants == nil then
+        return false, occupants_code or Diagnostics.ERROR_CODES.TERRAIN_API_UNAVAILABLE
+    end
+    for index = 1, #occupants do
+        if IsPlayerEntity(occupants[index].entity) then
+            return false, Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
+        end
+    end
+    for index = #occupants, 1, -1 do
+        if not RemoveEntity(occupants[index].entity) then
+            return false, Diagnostics.ERROR_CODES.ENTITY_REMOVE_FAILED
+        end
+    end
+
+    local remaining, remaining_code = terrain:FindOccupants(bounds)
+    if remaining == nil then
+        return false, remaining_code or Diagnostics.ERROR_CODES.TERRAIN_API_UNAVAILABLE
+    end
+    if #remaining > 0 then
+        return false, Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
+    end
+    return true
+end
+
 local function GetTileSet(plan, terrain)
     local doomed = {}
     local changes = {}
@@ -880,6 +906,13 @@ function SceneService.Reset(self, instance, reason)
     if not removed then
         return false, remove_code or Diagnostics.ERROR_CODES.ENTITY_REMOVE_FAILED
     end
+    local occupants_removed, occupants_code = RemoveNonPlayerOccupants(
+        self.terrain,
+        instance.zone.hard_bounds
+    )
+    if not occupants_removed then
+        return false, occupants_code
+    end
     local cleared, clear_code = self.terrain:ClearZone(
         instance_id,
         instance.zone,
@@ -913,27 +946,12 @@ function SceneService.RecoverSnapshot(self, snapshot, zone, reason)
         return false, Diagnostics.ERROR_CODES.SCENE_APPLY_FAILED
     end
 
-    local occupants, occupants_code = self.terrain:FindOccupants(zone.hard_bounds)
-    if occupants == nil then
-        return false, occupants_code or Diagnostics.ERROR_CODES.TERRAIN_API_UNAVAILABLE
-    end
-    for index = 1, #occupants do
-        if IsPlayerEntity(occupants[index].entity) then
-            return false, Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
-        end
-    end
-    for index = #occupants, 1, -1 do
-        if not RemoveEntity(occupants[index].entity) then
-            return false, Diagnostics.ERROR_CODES.ENTITY_REMOVE_FAILED
-        end
-    end
-
-    local remaining, remaining_code = self.terrain:FindOccupants(zone.hard_bounds)
-    if remaining == nil then
-        return false, remaining_code or Diagnostics.ERROR_CODES.TERRAIN_API_UNAVAILABLE
-    end
-    if #remaining > 0 then
-        return false, Diagnostics.ERROR_CODES.ZONE_NOT_EMPTY
+    local occupants_removed, occupants_code = RemoveNonPlayerOccupants(
+        self.terrain,
+        zone.hard_bounds
+    )
+    if not occupants_removed then
+        return false, occupants_code
     end
 
     local scene_snapshot = snapshot.scene
