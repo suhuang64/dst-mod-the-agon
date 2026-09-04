@@ -1078,8 +1078,8 @@ scripts/agon/modes/test_mode/runtime.lua
 1. LobbyService 管理进入、return point 和安全恢复点。
 2. Spectator 与 Participant 分离，不创建 PlayerSandbox snapshot。
 3. 进入观战时记录 lobby return position，在大厅生成唯一 `agon_spectator_echo`。
-4. 真实玩家移到目标 Zone spectator anchor，隐藏实体、阴影和地图标记，禁用 gameplay action、碰撞、受击、装备/技能影响。
-5. 客户端 spectator input layer 保留旋转、缩放、目标切换和受限自由相机。
+4. 真实玩家移到目标 Zone spectator anchor，隐藏实体、阴影和地图标记，禁用 gameplay action、碰撞、受击、装备/技能影响；补齐 `notarget/noattack/invisible/noplayertarget/NOCLICK` 等目标边界和组件级伤害/交互 guard，确保 A 不是“只隐藏画面”，而是不能被怪物、伤害、治疗、交易、喂食、诅咒、溺水、点火、冻结、雷击或其他普通/直接 gameplay 入口作用。
+5. `FOLLOW` 由服务端每帧同步隐藏玩家 A 的真实 Transform 到目标 Participant B；客户端只保留本地 A 的旋转/缩放输入，不切换 `TheCamera` 或 `TheFocalPoint` target。
 6. 服务端只接受观战白名单 RPC。
 7. Echo 仅复制只读外观和显示名，无 gameplay component，`persists = false`。
 8. 退出、断线、目标 Instance 结束、异常清理和服务器关闭都移除 Echo 并解除 guard。
@@ -1090,14 +1090,14 @@ scripts/agon/modes/test_mode/runtime.lua
 
 - `components/spectatorcorpse.lua`
 - `components/revivablecorpse.lua`
-- `components/focalpoint.lua`
+- `components/focalpoint.lua`（仅核对官方相机语义，不接管 target）
 - `components/playercontroller.lua`
 - Player StateGraph 和官方特殊活动的观战/尸体流程
 
 ### 验收
 
 - Spectator 原物品、技能树和持久状态不被改写。
-- Spectator 无法攻击、拾取、施法、发光、提供光环或影响 AI。
+- Spectator 无法攻击、拾取、施法、发光、提供光环或影响 AI；同时怪物、伤害/死亡/治疗、交易、喂食、诅咒和环境效果均不能作用到 A，包含绕过无敌的直接 Health 入口。
 - Echo 唯一、无碰撞、无 AI 影响，并在所有退出路径移除。
 - 观战者不能看到或切换到其他 Instance。
 - GHOST 可移动但受 Zone 边界限制。
@@ -1285,6 +1285,8 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 真实 Spectator 首轮发现客户端输入失败：A 已获服务端 `SPECTATING`/classified 状态，但 `playercontroller:Enable(false)` 使官方相机输入路径提前返回，当前 `agon_spectator_input_layer` 还没有客户端实现；必须先补安全的“保留旋转/缩放、继续屏蔽 gameplay input”接线并复测。
 - 同轮确认当前临时绑定脚本直接调用 `instance_manager:AttachPlayer()`，只完成 Participant/Sandbox 绑定，`InstanceManager:Start()` 也未移动真实 Participant 到 ScenePlan 出生点；因此 B 留在大厅是当前代码行为，但不是最终 Instance 场景验收通过，需单独补 Participant 出生/传送接线并验证大厅/Zone 边界。
 - 2026-09-04 已补齐上述两条接线：客户端 Spectator 通过 classified `agon_spectator_active` 绕过官方 `DoCameraControl()` 的 disabled 早退但不恢复 gameplay input；InstanceManager 在初始启动和运行中重连时按 `ScenePlan.participant_spawn_points` 移动真实 Participant，并由 Attach 清理大厅会话。重启后的真实双客户端验证仍未完成。
+- 2026-09-04 真实客户端复测确认：A 不能操作人物、相机旋转/缩放正常；初版 `camera=FOLLOW` 未实现 A 的位置持续同步到目标 B。上一版临时 classified/FocalPoint 相机接线已撤销，改为服务端 SpectatorService 周期性同步 A 的真实 Transform 到 B，静态检查和真实重启后的双客户端复测仍待完成。
+- 2026-09-05 根据维护者明确要求强化 Spectator 语义：A 不是“只隐藏的视觉对象”，必须对怪物目标、普通/绕过无敌的伤害、碰撞、拾取/交易/喂食/施法、诅咒、溺水、燃烧、冻结和生存值变化均无效。已在运行时 guard 增加官方排除标签、组件级阻断包装、ActionFilter、周期性保护重置；退出时恢复原组件方法、属性、标签和显示状态，真实服务端/双客户端验证待执行。
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。

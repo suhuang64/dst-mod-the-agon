@@ -1885,3 +1885,98 @@ docs(base): 修正执行日志文件名
 
 - `Zone.AttachMethods()` 的补丁已完成，`git diff --check` 通过，仅有 Git 的 LF/CRLF 提示；恢复入口运行失败前未发生状态转移。
 - 当前下一步为保存并重启，加载修复后的 Zone 方法表，然后重新执行孤立 Zone 恢复。
+
+### 2.96 2026-09-04：孤立隔离 Zone 受控恢复通过
+
+- 维护者重启后执行 `RecoverOrphanedZone("small_01", "agon:1:3", "wp10_orphan_zone_recovery")`；服务端公告 `WP10_ORPHAN_ZONE_RECOVERY:true:ZONE_RECOVERED`。
+- 受控恢复入口已完成实体清理、Tile 清回与空 Zone 验证后释放 `small_01`；下一步核验全局 `ValidateCore`、Instance/Zone/Recovery Debug。
+
+### 2.97 2026-09-04：全局结构性恢复基线通过但保留 2 条诊断计数
+
+- `WP10_ORPHAN_ZONE_FINAL` 返回 `validate=true`、`instances=0`、`zones=10`、`restores=0`、`backend_pending=0`；Zone Debug 确认 `small_01` 及其余 Zone 均为 `FREE`、owner=nil。
+- Debug 字符串仍显示 `errors=2`；同一启动日志中的 The Agon 启动/恢复/核心日志均正常，官方仅有两条既知 set-piece 警告。下一步读取 Runtime 的 `diagnostics.error_count/last_error_code/last_message`，区分历史持久化计数与当前错误。
+
+### 2.98 2026-09-04：确认 2 条诊断计数的持久化错误类型
+
+- `WP10_ERROR_DIAG` 返回 `count=2`、`last=PERSISTENCE_NON_SERIALIZABLE`、`message=PERSISTENCE_INVALID_NUMBER`。
+- 当前启动日志未出现新的 The Agon 持久化失败；下一步执行一次 Runtime `OnSave()` 探针，比较 `error_count` 是否增加，以确认该计数是否只是此前故障实例保存时遗留。
+
+### 2.99 2026-09-04：当前 Runtime 持久化探针通过
+
+- `WP10_PERSIST_CURRENT` 返回 `save=true:new_errors=0:count=2`；当前无活动 Instance、无恢复队列、无 Backend pending，保存调用未新增非法数字错误。
+- `count=2` 保留为历史诊断记录，不能当作当前保存失败；下一步开启真实玩家测试开关，继续 WP10 Spectator/Camera 验收。
+
+### 3.00 2026-09-04：真实 Spectator/Camera 验收开关开启
+
+- 维护者开启 live player test；服务端公告 `WP10_SPECTATOR_TEST_ON:true:PLAYER_TEST_ENABLED`。
+- A=`KU_UR8pbyho` 保持大厅观察者身份，B=`KU_aUxMQjy7` 作为唯一目标 Participant；下一步创建 B-only `TEST_MODE` Instance。
+
+### 3.01 2026-09-04：Spectator 目标 Instance 创建通过
+
+- 维护者创建仅包含 B=`KU_aUxMQjy7` 的目标实例；服务端公告 `WP10_SPECTATOR_CREATE:agon:1:1:zone=small_01`。
+- A 继续留在大厅，下一步绑定 B 到 `agon:1:1`。
+
+### 3.02 2026-09-04：Spectator 目标 Participant 绑定通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:1`；服务端公告 `WP10_SPECTATOR_ATTACH_B:true:nil`。
+- 当前进入启动前基线检查；A 仍作为大厅观察者，尚未进入目标 Instance。
+
+### 3.03 2026-09-04：确认绑定后尚未启动时 B 仍显示在大厅位置
+
+- 维护者观察到 B 绑定成功后仍位于大厅画面。
+- 这是启动前的预期阶段：Attach 已完成 Participant/Sandbox 绑定并清除大厅会话；真实玩家的实例出生点移动由 `StartInstance` 执行。下一步启动 `agon:1:1`，再验证 B 离开大厅并到达 `small_01`。
+
+### 3.04 2026-09-04：Spectator 目标 Instance 启动通过
+
+- 维护者启动 `agon:1:1`；服务端公告 `WP10_SPECTATOR_START:true:nil`。
+- 下一步核验 B 的 Participant/实例出生 Tile，以及 A 是否仍保持大厅状态。
+
+### 3.05 2026-09-04：目标 Instance 运行态与大厅隔离通过，当前位置待区分
+
+- `WP10_SPECTATOR_START_DIAG` 返回 `instance=RUNNING`、`A_lobby=true`、`B_state=READY`、`B_lobby=false`，证明 B 已脱离大厅并进入运行中的 Instance，A 仍在大厅。
+- 检查时实际 Tile=`47,259`、启动预期 Tile=`42,265`；由于启动与检查间隔约 90 秒，先读取运行时记录的 `agon_instance_spawn_tile`，区分 B 进入后移动与出生定位未生效。
+
+### 3.06 2026-09-04：确认目标 Participant 位置差异来自真实玩家移动
+
+- 维护者确认 B 在启动后自行移动，因此实际 Tile=`47,259` 与初始预期 Tile=`42,265` 的差异属于正常游戏移动，不构成出生定位失败。
+- 目标 Instance 运行态、B 脱离大厅、A 保持大厅均已确认；下一步让 A 进入 `agon:1:1` 观战 B，验收观战状态及相机输入。
+
+### 3.07 2026-09-04：Spectator 进入目标 Instance 成功
+
+- 维护者让 A=`KU_UR8pbyho` 观战 B=`KU_aUxMQjy7`；服务端公告 `WP10_SPECTATOR_ENTER:state=SPECTATING:instance=agon:1:1:target=KU_aUxMQjy7:echo=agon:echo:1:anchor=1`。
+- 下一步核对 A 的服务端观战会话、Participant 排除状态、玩家观战标志及 classified 状态，然后进行真实客户端相机输入验收。
+
+### 3.08 2026-09-04：Spectator 服务端状态与相机权限通过
+
+- `WP10_SPECTATOR_STATE` 返回 `state=SPECTATING`、`instance=agon:1:1`、`target=KU_aUxMQjy7`、`participant=false`、`player_is_spectator=true`、`spectating_instance_id=agon:1:1`、`rotation=true`、`zoom=true`、`classified=true`。
+- 服务端状态已满足观战相机验收条件；下一步必须由 A 的真实客户端确认旋转/缩放输入，同时确认移动、攻击和交互仍被禁止。
+
+### 3.09 2026-09-04：真实 Spectator 客户端输入部分通过，FOLLOW 跟随缺口确认
+
+- A 真实客户端验证：人物不能操作；相机可以旋转和缩放；因此 gameplay 锁定及 `spectator_input` 的旋转/缩放接线通过。
+- A 的画面没有跟随 B。该结果不是测试误解：本次会话明确为 `camera=FOLLOW`、`target=KU_aUxMQjy7`，按设计相机中心应随 B 的位置更新。
+- 当前实现仅保存 `target_userid`/`camera_mode` 并开放旋转/缩放输入，没有客户端相机目标跟随更新逻辑；FOLLOW 相机列为待补接线，暂不改变代码，等待明确修复指令。
+
+### 3.10 2026-09-04：补充 Spectator FOLLOW 相机接线
+
+- 根据维护者对“所以呢”的继续指示，补充 `classified` 的 `spectator_target_userid` 与 `spectator_camera_mode` 网络字段；进入/退出观战时分别写入/清空，客户端不依赖解析整段 JSON 状态即可获得目标。
+- `scripts/agon/player/spectator_input.lua` 使用官方 `TheFocalPoint.components.focalpoint:StartFocusSource` 建立 FOLLOW 源，按目标 B 的实时 Transform 更新相机中心；状态失效、目标切换或退出观战时移除该源。
+- 保留已通过的 gameplay 禁用、相机旋转与缩放逻辑；静态 `git diff --check` 通过。当前服务器尚未重启加载本修复，下一步先清理 `agon:1:1`，再重启并复测 FOLLOW。
+
+### 3.11 2026-09-05：按维护者要求改为真实玩家 Transform 跟随并强化非视觉保护
+
+- 维护者明确否定“切换客户端相机 target/FocalPoint”的方案，最终语义固定为：Spectator A 的真实玩家实体隐藏、无碰撞、不可操作，服务端每帧把 A 的 Transform 同步到目标 Participant B；官方相机仍跟随本地 A，因此不需要相机 target 更新。
+- 上一条 3.10 的临时 classified `spectator_target_userid`/`spectator_camera_mode` 字段和 `spectator_input.lua` 的 FocalPoint FOLLOW 接线已撤销，保留客户端仅用于旋转/缩放的输入补丁。
+- 根据“怪物、伤害、所有互动都不能作用到 A”的要求，Spectator guard 现在额外维护官方目标排除标签 `notarget/noattack/invisible/noplayertarget/NOCLICK/noauradamage/noember/fireimmune` 及 `agon_spectator` 标志；关闭 Physics 碰撞、Health 无敌并周期性重置保护状态。
+- 对真实玩家常见受影响入口增加运行时组件级阻断：Combat 受击/被攻击/主动攻击、Health 普通与绕过无敌的伤害/死亡/数值写入、Trader 交易、Eater 喂食、Debuffable 诅咒、Drownable 溺水/掉虚空、Burnable 点火/火势、Freezable 冻结、PlayerLightningTarget 雷击，以及 Hunger/Sanity/Temperature/Moisture 的变化；同时安装高优先级 `PlayerActionPicker` 过滤器。
+- 所有组件方法、属性、标签、ActionFilter、隐藏/阴影/地图图标/碰撞/控制器状态均记录在可逆 guard 中，退出或异常清理恢复原值；跟随任务在退出、Instance 销毁和玩家移除时取消。此处为代码实现记录，不等于真实服务端或双客户端验收通过。
+- 本次变更仍需静态 Lua 语法/差异检查，并在官方 `Test/World01` 重启后重新验证：A 随 B 移动、A 不被怪物锁定/伤害/交互、A 仍可旋转/缩放相机、退出后所有状态恢复。
+
+### 3.12 2026-09-05：完成 Spectator 硬隔离实现的静态收口
+
+- 根据维护者进一步明确的验收语义，A 的“隐身”定义为服务端硬隔离，而不是视觉效果：A 的真实玩家实体仍存在并作为本地相机实体，但必须无碰撞、不可操作、不可成为怪物/玩家/投射物目标、不可受伤或死亡、不可被交易/喂食/诅咒/溺水/点火/冻结/雷击等普通或直接 gameplay 入口作用。
+- `spectator_service.lua` 已完成可逆 guard：官方目标排除标签、隐藏/阴影/地图图标/Physics/PlayerController、ActionFilter、Combat/Health/Trader/Eater/Debuffable/Drownable/Burnable/Freezable/PlayerLightningTarget 以及 Hunger/Sanity/Temperature/Moisture 组件入口均在进入时阻断，并在周期任务中持续清除 buffered action、恢复保护状态；退出或异常清理按原值恢复。
+- FOLLOW 已固定为服务端读取目标 B 的真实 `Transform:GetWorldPosition()`，每个模拟 tick 写入 A 的真实 `Transform:SetPosition()`；客户端只保留 A 的旋转/缩放相机输入，未接管 `TheFocalPoint` 或切换相机 target。
+- 额外修正了无 guard 清理时遗留 `agon_spectator_guard_mode` 的问题，并将读取目标 Participant 包装为 protected call，避免断线/销毁竞态直接抛错；周期跟随继续在目标暂时不可用时保持 A 的最后安全位置。
+- 静态收口：`git diff --check` 通过（仅 Git 报告 LF/CRLF 转换提示）；`rg` 确认源码不再引用已撤销的 `TheFocalPoint`/FOLLOW source 或临时 classified target 字段；当前环境没有 `lua`、`luac`、`luajit`、`stylua`、`selene`，未全局安装工具，因此 Lua 解析和真实行为仍必须由官方 `Test/World01` 重启后的实服测试完成。
+- 下一步实服验收顺序：重启加载新 Lua → 开启 live player test → 创建 B-only Instance 并启动 → A 进入 FOLLOW 观战 → 移动 B 验证 A 的真实位置/官方相机同步 → 以怪物、伤害、普通交互分别验证 A 不受影响 → A 退出并确认 guard、位置、组件、Zone、Instance、恢复队列全部清理。维护者返回的每次结果继续追加本文件。

@@ -40,9 +40,160 @@ SpectatorService.ERROR_CODES =
     ECHO_CREATE_FAILED = "SPECTATOR_ECHO_CREATE_FAILED",
     ECHO_REMOVE_FAILED = "SPECTATOR_ECHO_REMOVE_FAILED",
     PLAYER_GUARD_FAILED = "SPECTATOR_PLAYER_GUARD_FAILED",
+    FOLLOW_TASK_FAILED = "SPECTATOR_FOLLOW_TASK_FAILED",
     CROSS_INSTANCE = "SPECTATOR_CROSS_INSTANCE_FORBIDDEN",
     ACTION_FORBIDDEN = "SPECTATOR_ACTION_FORBIDDEN",
     TARGET_NOT_FOUND = "SPECTATOR_TARGET_NOT_FOUND",
+}
+
+-- FOLLOW 使用服务端真实玩家实体的位置同步；客户端仍以本地 A 为相机实体。
+local FOLLOW_UPDATE_PERIOD = 0
+
+-- 这些是运行时保护标签，不改变玩家存档；Apply/Restore 必须成对处理。
+local PROTECTION_TAGS =
+{
+    "agon_spectator",
+    "notarget",
+    "noattack",
+    "invisible",
+    "noplayertarget",
+    "NOCLICK",
+    "noauradamage",
+    "noember",
+    "fireimmune",
+}
+
+local HEALTH_GUARD_METHODS =
+{
+    "DoDelta",
+    "DoFireDamage",
+    "SetVal",
+    "SetCurrentHealth",
+    "SetMaxHealth",
+    "SetMinHealth",
+    "SetPercent",
+    "SetPenalty",
+    "DeltaPenalty",
+    "Kill",
+    "ForceKill",
+    "SetInvincible",
+}
+
+local COMBAT_GUARD_METHODS =
+{
+    "GetAttacked",
+    "CanBeAttacked",
+    "SetTarget",
+    "DoAttack",
+    "TryAttack",
+    "ForceAttack",
+    "StartAttack",
+}
+
+local TRADER_GUARD_METHODS =
+{
+    "AbleToAccept",
+    "WantsToAccept",
+    "AcceptGift",
+    "Enable",
+    "Disable",
+}
+
+local EATER_GUARD_METHODS =
+{
+    "Eat",
+    "CanEat",
+    "TestFood",
+    "DoFoodEffects",
+}
+
+local DEBUFFABLE_GUARD_METHODS =
+{
+    "AddDebuff",
+    "RemoveDebuff",
+    "Enable",
+}
+
+local DROWNABLE_GUARD_METHODS =
+{
+    "CheckDrownable",
+    "TakeDrowningDamage",
+    "OnFallInOcean",
+    "OnFallInVoid",
+    "WashAshore",
+    "VoidArrive",
+    "Teleport",
+}
+
+local BURNABLE_GUARD_METHODS =
+{
+    "Ignite",
+    "StartWildfire",
+    "Extinguish",
+    "SmotherSmolder",
+    "StopSmoldering",
+    "ExtendBurning",
+    "StokeControlledBurn",
+}
+
+local FREEZABLE_GUARD_METHODS =
+{
+    "AddColdness",
+    "Freeze",
+    "Unfreeze",
+    "Thaw",
+    "Reset",
+}
+
+local HUNGER_GUARD_METHODS =
+{
+    "DoDelta",
+    "DoDec",
+    "SetCurrent",
+    "SetPercent",
+    "SetMax",
+    "SetRate",
+    "SetKillRate",
+    "Pause",
+    "Resume",
+}
+
+local SANITY_GUARD_METHODS =
+{
+    "DoDelta",
+    "SetCurrent",
+    "SetPercent",
+    "SetMax",
+    "SetInducedInsanity",
+    "SetInducedLunacy",
+    "EnableLunacy",
+    "AddSanityPenalty",
+    "RemoveSanityPenalty",
+    "SetFullAuraImmunity",
+    "SetNegativeAuraImmunity",
+    "SetPlayerGhostImmunity",
+    "SetLightDrainImmune",
+}
+
+local TEMPERATURE_GUARD_METHODS =
+{
+    "DoDelta",
+    "SetTemperature",
+    "SetTemp",
+    "SetTemperatureInBelly",
+}
+
+local MOISTURE_GUARD_METHODS =
+{
+    "DoDelta",
+    "SetMoistureLevel",
+    "SetPercent",
+    "ForceDry",
+}
+
+local PLAYER_LIGHTNING_GUARD_METHODS =
+{
+    "DoStrike",
 }
 
 local function IsFiniteNumber(value)
@@ -137,6 +288,24 @@ local function GetPlayerPosition(player)
     return nil
 end
 
+-- 观战目标必须读取真实实体位置，不能复用观战者自己的锚点缓存。
+local function GetActualPlayerPosition(player)
+    if type(player) ~= "table" then
+        return nil
+    end
+    if player.Transform ~= nil
+        and type(player.Transform.GetWorldPosition) == "function" then
+        local ok, x, y, z = ProtectedCall(
+            player.Transform.GetWorldPosition,
+            player.Transform
+        )
+        if ok and IsFiniteNumber(x) and IsFiniteNumber(z) then
+            return { x = x, y = y or 0, z = z }
+        end
+    end
+    return GetPlayerPosition(player)
+end
+
 local function SetPlayerPosition(player, position)
     if not IsValidPlayer(player) or type(position) ~= "table"
         or not IsFiniteNumber(position.x) or not IsFiniteNumber(position.z) then
@@ -181,6 +350,67 @@ local function RemoveTag(player, tag)
     return true
 end
 
+local function CaptureComponentMethods(component, method_names)
+    local saved = {}
+    if type(component) ~= "table" then
+        return saved
+    end
+    for index = 1, #method_names do
+        local name = method_names[index]
+        saved[name] = rawget(component, name)
+    end
+    return saved
+end
+
+local function RestoreComponentMethods(component, saved)
+    if type(component) ~= "table" or type(saved) ~= "table" then
+        return
+    end
+    for name, value in pairs(saved) do
+        rawset(component, name, value)
+    end
+end
+
+local function InstallGuardedMethod(component, name, blocked_result)
+    if type(component) ~= "table" then
+        return
+    end
+    local original = component[name]
+    if type(original) ~= "function" then
+        return
+    end
+    rawset(component, name, function(self, ...)
+        if self ~= nil and self.inst ~= nil
+            and self.inst.is_spectator == true then
+            return blocked_result
+        end
+        return original(self, ...)
+    end)
+end
+
+local function InstallForcedTrueMethod(component, name)
+    if type(component) ~= "table" then
+        return
+    end
+    local original = component[name]
+    if type(original) ~= "function" then
+        return
+    end
+    rawset(component, name, function(self, ...)
+        if self ~= nil and self.inst ~= nil
+            and self.inst.is_spectator == true then
+            return original(self, true)
+        end
+        return original(self, ...)
+    end)
+end
+
+local function InstallGuardedMethods(component, method_names, blocked_result)
+    for index = 1, #method_names do
+        InstallGuardedMethod(component, method_names[index], blocked_result)
+    end
+end
+
 local function GetNetBoolean(value, default)
     if value ~= nil and type(value.value) == "function" then
         local ok, result = ProtectedCall(value.value, value)
@@ -192,6 +422,22 @@ local function GetNetBoolean(value, default)
 end
 
 local function CapturePlayerGuard(player)
+    local components = type(player.components) == "table"
+        and player.components
+        or {}
+    local health = components.health
+    local combat = components.combat
+    local trader = components.trader
+    local eater = components.eater
+    local debuffable = components.debuffable
+    local drownable = components.drownable
+    local burnable = components.burnable
+    local freezable = components.freezable
+    local hunger = components.hunger
+    local sanity = components.sanity
+    local temperature = components.temperature
+    local moisture = components.moisture
+    local player_lightning_target = components.playerlightningtarget
     local guard =
     {
         visible = true,
@@ -200,8 +446,65 @@ local function CapturePlayerGuard(player)
         physics_active = true,
         controller_enabled = true,
         health_invincible = false,
-        had_notarget = HasTag(player, "notarget"),
+        component_methods =
+        {
+            health = CaptureComponentMethods(health, HEALTH_GUARD_METHODS),
+            combat = CaptureComponentMethods(combat, COMBAT_GUARD_METHODS),
+            trader = CaptureComponentMethods(trader, TRADER_GUARD_METHODS),
+            eater = CaptureComponentMethods(eater, EATER_GUARD_METHODS),
+            debuffable = CaptureComponentMethods(
+                debuffable,
+                DEBUFFABLE_GUARD_METHODS
+            ),
+            drownable = CaptureComponentMethods(
+                drownable,
+                DROWNABLE_GUARD_METHODS
+            ),
+            burnable = CaptureComponentMethods(burnable, BURNABLE_GUARD_METHODS),
+            freezable = CaptureComponentMethods(
+                freezable,
+                FREEZABLE_GUARD_METHODS
+            ),
+            hunger = CaptureComponentMethods(hunger, HUNGER_GUARD_METHODS),
+            sanity = CaptureComponentMethods(sanity, SANITY_GUARD_METHODS),
+            temperature = CaptureComponentMethods(
+                temperature,
+                TEMPERATURE_GUARD_METHODS
+            ),
+            moisture = CaptureComponentMethods(
+                moisture,
+                MOISTURE_GUARD_METHODS
+            ),
+            playerlightningtarget = CaptureComponentMethods(
+                player_lightning_target,
+                PLAYER_LIGHTNING_GUARD_METHODS
+            ),
+        },
+        action_filter_installed = false,
+        added_tags = {},
+        had_tags = {},
+        hunger_paused = hunger ~= nil and hunger.burning == false,
+        debuffable_enabled = debuffable ~= nil
+            and debuffable.enable ~= false,
+        drownable_enabled = drownable ~= nil and drownable.enabled,
+        trader_enabled = trader ~= nil and trader.enabled ~= false,
+        burnable_canlight = burnable ~= nil and burnable.canlight,
+        burnable_lightningimmune = burnable ~= nil
+            and burnable.lightningimmune == true,
+        burnable_burning = burnable ~= nil and burnable.burning == true,
+        burnable_smoldering = burnable ~= nil and burnable.smoldering == true,
+        freezable_coldness = freezable ~= nil and freezable.coldness,
+        freezable_frozen = false,
+        previous_guard_mode = player.agon_spectator_guard_mode,
     }
+    for index = 1, #PROTECTION_TAGS do
+        local tag = PROTECTION_TAGS[index]
+        guard.had_tags[tag] = HasTag(player, tag)
+    end
+    if freezable ~= nil and type(freezable.IsFrozen) == "function" then
+        local ok, frozen = ProtectedCall(freezable.IsFrozen, freezable)
+        guard.freezable_frozen = ok and frozen == true
+    end
     if player.entity ~= nil and type(player.entity.IsVisible) == "function" then
         local ok, visible = ProtectedCall(player.entity.IsVisible, player.entity)
         if ok and type(visible) == "boolean" then
@@ -214,9 +517,7 @@ local function CapturePlayerGuard(player)
             guard.physics_active = active
         end
     end
-    local controller = type(player.components) == "table"
-        and player.components.playercontroller
-        or nil
+    local controller = components.playercontroller
     if controller ~= nil and controller.classified ~= nil then
         guard.controller_enabled = GetNetBoolean(
             controller.classified.iscontrollerenabled,
@@ -228,9 +529,6 @@ local function CapturePlayerGuard(player)
             guard.controller_enabled = enabled
         end
     end
-    local health = type(player.components) == "table"
-        and player.components.health
-        or nil
     if health ~= nil and type(health.invincible) == "boolean" then
         guard.health_invincible = health.invincible
     end
@@ -257,6 +555,24 @@ local function ShowPlayer(player, visible)
     end
     local ok = ProtectedCall(method, player.entity)
     return ok
+end
+
+local function AddProtectionTags(player, guard)
+    for index = 1, #PROTECTION_TAGS do
+        local tag = PROTECTION_TAGS[index]
+        if not HasTag(player, tag) then
+            local added = AddTag(player, tag)
+            if not added then
+                return false
+            end
+            guard.added_tags[tag] = true
+        end
+    end
+    return true
+end
+
+local function SpectatorActionFilter(inst)
+    return inst == nil or inst.is_spectator ~= true
 end
 
 local function CreateSyntheticEcho(echo_id)
@@ -518,6 +834,7 @@ end
 local function ApplyPlayerGuard(player, guard)
     player.is_spectator = true
     player.spectating_instance_id = guard.instance_id
+    player.agon_spectator_guard_mode = "HARD_NONINTERACTIVE_FOLLOW"
     player.agon_spectator_guard = guard
     player.agon_spectator_input_layer =
     {
@@ -526,8 +843,7 @@ local function ApplyPlayerGuard(player, guard)
         target_switch = true,
         free_camera = false,
     }
-    local notarget_added = AddTag(player, "notarget")
-    if not notarget_added then
+    if not AddProtectionTags(player, guard) then
         return false
     end
     if type(player.ClearBufferedAction) == "function" then
@@ -536,6 +852,138 @@ local function ApplyPlayerGuard(player, guard)
             return false
         end
     end
+
+    local components = type(player.components) == "table"
+        and player.components
+        or {}
+    local health = components.health
+    local combat = components.combat
+    local trader = components.trader
+    local eater = components.eater
+    local debuffable = components.debuffable
+    local drownable = components.drownable
+    local burnable = components.burnable
+    local freezable = components.freezable
+    local hunger = components.hunger
+    local sanity = components.sanity
+    local temperature = components.temperature
+    local moisture = components.moisture
+    local player_lightning_target = components.playerlightningtarget
+
+    -- 先用原始组件方法清理当前效果，再安装运行时阻断包装。
+    if health ~= nil and type(health.SetInvincible) == "function" then
+        local ok = ProtectedCall(health.SetInvincible, health, true)
+        if not ok then
+            return false
+        end
+    end
+    if combat ~= nil and type(combat.SetTarget) == "function" then
+        local ok = ProtectedCall(combat.SetTarget, combat, nil)
+        if not ok then
+            return false
+        end
+    end
+    if trader ~= nil and type(trader.Disable) == "function" then
+        local ok = ProtectedCall(trader.Disable, trader)
+        if not ok then
+            return false
+        end
+    end
+    if debuffable ~= nil then
+        debuffable.enable = false
+    end
+    if drownable ~= nil then
+        drownable.enabled = false
+    end
+    if burnable ~= nil then
+        if (burnable.burning or burnable.smoldering)
+            and type(burnable.Extinguish) == "function" then
+            local ok = ProtectedCall(burnable.Extinguish, burnable)
+            if not ok then
+                return false
+            end
+        end
+        burnable.canlight = false
+        burnable.lightningimmune = true
+    end
+    if freezable ~= nil then
+        if guard.freezable_frozen
+            and type(freezable.Unfreeze) == "function" then
+            local ok = ProtectedCall(freezable.Unfreeze, freezable)
+            if not ok then
+                return false
+            end
+        end
+        freezable.coldness = 0
+        if type(freezable.UpdateTint) == "function" then
+            local ok = ProtectedCall(freezable.UpdateTint, freezable)
+            if not ok then
+                return false
+            end
+        end
+    end
+    if hunger ~= nil and not guard.hunger_paused
+        and type(hunger.Pause) == "function" then
+        local ok = ProtectedCall(hunger.Pause, hunger)
+        if not ok then
+            return false
+        end
+    end
+
+    InstallGuardedMethods(health, HEALTH_GUARD_METHODS)
+    InstallGuardedMethod(health, "DoDelta", 0)
+    InstallGuardedMethod(health, "DoFireDamage", 0)
+    InstallForcedTrueMethod(health, "SetInvincible")
+
+    InstallGuardedMethods(combat, COMBAT_GUARD_METHODS)
+    InstallGuardedMethod(combat, "GetAttacked", false)
+    InstallGuardedMethod(combat, "CanBeAttacked", false)
+    InstallGuardedMethod(combat, "TryAttack", false)
+    InstallGuardedMethod(combat, "ForceAttack", false)
+
+    InstallGuardedMethods(trader, TRADER_GUARD_METHODS)
+    InstallGuardedMethod(trader, "AbleToAccept", false)
+    InstallGuardedMethod(trader, "WantsToAccept", false)
+    InstallGuardedMethod(trader, "AcceptGift", false)
+
+    InstallGuardedMethods(eater, EATER_GUARD_METHODS)
+    InstallGuardedMethod(eater, "Eat", false)
+    InstallGuardedMethod(eater, "CanEat", false)
+    InstallGuardedMethod(eater, "TestFood", false)
+
+    InstallGuardedMethods(debuffable, DEBUFFABLE_GUARD_METHODS)
+    InstallGuardedMethod(debuffable, "AddDebuff", false)
+
+    InstallGuardedMethods(drownable, DROWNABLE_GUARD_METHODS)
+    InstallGuardedMethod(drownable, "CheckDrownable", false)
+    InstallGuardedMethod(drownable, "TakeDrowningDamage", false)
+
+    InstallGuardedMethods(burnable, BURNABLE_GUARD_METHODS)
+    InstallGuardedMethods(freezable, FREEZABLE_GUARD_METHODS)
+    InstallGuardedMethods(hunger, HUNGER_GUARD_METHODS)
+    InstallGuardedMethods(sanity, SANITY_GUARD_METHODS)
+    InstallGuardedMethods(temperature, TEMPERATURE_GUARD_METHODS)
+    InstallGuardedMethods(moisture, MOISTURE_GUARD_METHODS)
+    InstallGuardedMethods(
+        player_lightning_target,
+        PLAYER_LIGHTNING_GUARD_METHODS
+    )
+
+    local action_picker = components.playeractionpicker
+    if action_picker ~= nil
+        and type(action_picker.PushActionFilter) == "function" then
+        local ok = ProtectedCall(
+            action_picker.PushActionFilter,
+            action_picker,
+            SpectatorActionFilter,
+            1000000
+        )
+        if not ok then
+            return false
+        end
+        guard.action_filter_installed = true
+    end
+
     if not HidePlayer(player) then
         return false
     end
@@ -560,20 +1008,9 @@ local function ApplyPlayerGuard(player, guard)
             return false
         end
     end
-    local controller = type(player.components) == "table"
-        and player.components.playercontroller
-        or nil
+    local controller = components.playercontroller
     if controller ~= nil and type(controller.Enable) == "function" then
         local ok = ProtectedCall(controller.Enable, controller, false)
-        if not ok then
-            return false
-        end
-    end
-    local health = type(player.components) == "table"
-        and player.components.health
-        or nil
-    if health ~= nil and type(health.SetInvincible) == "function" then
-        local ok = ProtectedCall(health.SetInvincible, health, true)
         if not ok then
             return false
         end
@@ -590,10 +1027,120 @@ local function RestorePlayerGuard(player)
     if type(guard) ~= "table" then
         player.is_spectator = nil
         player.spectating_instance_id = nil
+        player.agon_spectator_guard_mode = nil
         player.agon_spectator_input_layer = nil
         return true
     end
     local restored = true
+
+    local components = type(player.components) == "table"
+        and player.components
+        or {}
+    RestoreComponentMethods(
+        components.health,
+        guard.component_methods ~= nil and guard.component_methods.health
+    )
+    RestoreComponentMethods(
+        components.combat,
+        guard.component_methods ~= nil and guard.component_methods.combat
+    )
+    RestoreComponentMethods(
+        components.trader,
+        guard.component_methods ~= nil and guard.component_methods.trader
+    )
+    RestoreComponentMethods(
+        components.eater,
+        guard.component_methods ~= nil and guard.component_methods.eater
+    )
+    RestoreComponentMethods(
+        components.debuffable,
+        guard.component_methods ~= nil and guard.component_methods.debuffable
+    )
+    RestoreComponentMethods(
+        components.drownable,
+        guard.component_methods ~= nil and guard.component_methods.drownable
+    )
+    RestoreComponentMethods(
+        components.burnable,
+        guard.component_methods ~= nil and guard.component_methods.burnable
+    )
+    RestoreComponentMethods(
+        components.freezable,
+        guard.component_methods ~= nil and guard.component_methods.freezable
+    )
+    RestoreComponentMethods(
+        components.hunger,
+        guard.component_methods ~= nil and guard.component_methods.hunger
+    )
+    RestoreComponentMethods(
+        components.sanity,
+        guard.component_methods ~= nil and guard.component_methods.sanity
+    )
+    RestoreComponentMethods(
+        components.temperature,
+        guard.component_methods ~= nil and guard.component_methods.temperature
+    )
+    RestoreComponentMethods(
+        components.moisture,
+        guard.component_methods ~= nil and guard.component_methods.moisture
+    )
+    RestoreComponentMethods(
+        components.playerlightningtarget,
+        guard.component_methods ~= nil
+            and guard.component_methods.playerlightningtarget
+    )
+
+    local action_picker = components.playeractionpicker
+    if guard.action_filter_installed and action_picker ~= nil
+        and type(action_picker.PopActionFilter) == "function" then
+        restored = ProtectedCall(
+            action_picker.PopActionFilter,
+            action_picker,
+            SpectatorActionFilter
+        ) and restored
+    end
+
+    local health = components.health
+    if health ~= nil and type(health.SetInvincible) == "function" then
+        restored = ProtectedCall(
+            health.SetInvincible,
+            health,
+            guard.health_invincible == true
+        ) and restored
+    end
+    local trader = components.trader
+    if trader ~= nil and guard.trader_enabled ~= nil then
+        trader.enabled = guard.trader_enabled
+    end
+    local debuffable = components.debuffable
+    if debuffable ~= nil and guard.debuffable_enabled ~= nil then
+        debuffable.enable = guard.debuffable_enabled
+    end
+    local drownable = components.drownable
+    if drownable ~= nil then
+        drownable.enabled = guard.drownable_enabled
+    end
+    local burnable = components.burnable
+    if burnable ~= nil then
+        burnable.canlight = guard.burnable_canlight
+        burnable.lightningimmune = guard.burnable_lightningimmune
+    end
+    local freezable = components.freezable
+    if freezable ~= nil then
+        freezable.coldness = guard.freezable_coldness
+        if guard.freezable_frozen
+            and type(freezable.Freeze) == "function" then
+            restored = ProtectedCall(freezable.Freeze, freezable) and restored
+        elseif type(freezable.UpdateTint) == "function" then
+            restored = ProtectedCall(freezable.UpdateTint, freezable) and restored
+        end
+    end
+    local hunger = components.hunger
+    if hunger ~= nil and not guard.hunger_paused
+        and type(hunger.Resume) == "function" then
+        restored = ProtectedCall(hunger.Resume, hunger) and restored
+    end
+
     restored = ShowPlayer(player, guard.visible) and restored
     if player.DynamicShadow ~= nil
         and type(player.DynamicShadow.Enable) == "function" then
@@ -618,9 +1165,7 @@ local function RestorePlayerGuard(player)
             guard.physics_active ~= false
         ) and restored
     end
-    local controller = type(player.components) == "table"
-        and player.components.playercontroller
-        or nil
+    local controller = components.playercontroller
     if controller ~= nil and type(controller.Enable) == "function" then
         restored = ProtectedCall(
             controller.Enable,
@@ -628,25 +1173,185 @@ local function RestorePlayerGuard(player)
             guard.controller_enabled ~= false
         ) and restored
     end
-    local health = type(player.components) == "table"
-        and player.components.health
-        or nil
-    if health ~= nil and type(health.SetInvincible) == "function" then
-        restored = ProtectedCall(
-            health.SetInvincible,
-            health,
-            guard.health_invincible == true
-        ) and restored
+    local had_tags = guard.had_tags or {}
+    for index = 1, #PROTECTION_TAGS do
+        local tag = PROTECTION_TAGS[index]
+        local had_tag = had_tags[tag]
+        if had_tag == nil and tag == "notarget" then
+            had_tag = guard.had_notarget == true
+        end
+        if not had_tag then
+            restored = RemoveTag(player, tag) and restored
+        end
     end
-    if not guard.had_notarget then
-        restored = RemoveTag(player, "notarget") and restored
+    if burnable ~= nil then
+        if guard.burnable_burning
+            and type(burnable.Ignite) == "function" then
+            restored = ProtectedCall(burnable.Ignite, burnable, true) and restored
+        elseif guard.burnable_smoldering
+            and type(burnable.StartWildfire) == "function" then
+            restored = ProtectedCall(burnable.StartWildfire, burnable) and restored
+        end
     end
     player.is_spectator = nil
     player.spectating_instance_id = nil
+    player.agon_spectator_guard_mode = guard.previous_guard_mode
     player.agon_spectator_guard = nil
     player.agon_spectator_guard_applied = nil
     player.agon_spectator_input_layer = nil
     return restored
+end
+
+local function MaintainPlayerGuard(player)
+    if type(player) ~= "table" or player.is_spectator ~= true then
+        return false
+    end
+    local guard = player.agon_spectator_guard
+    if type(guard) ~= "table" then
+        return false
+    end
+    if type(player.ClearBufferedAction) == "function" then
+        ProtectedCall(player.ClearBufferedAction, player)
+    end
+    for index = 1, #PROTECTION_TAGS do
+        local tag = PROTECTION_TAGS[index]
+        if not HasTag(player, tag) then
+            AddTag(player, tag)
+        end
+    end
+    HidePlayer(player)
+    if player.DynamicShadow ~= nil
+        and type(player.DynamicShadow.Enable) == "function" then
+        ProtectedCall(player.DynamicShadow.Enable, player.DynamicShadow, false)
+    end
+    if player.MiniMapEntity ~= nil
+        and type(player.MiniMapEntity.SetEnabled) == "function" then
+        ProtectedCall(player.MiniMapEntity.SetEnabled, player.MiniMapEntity, false)
+    end
+    if player.Physics ~= nil and type(player.Physics.SetActive) == "function" then
+        ProtectedCall(player.Physics.SetActive, player.Physics, false)
+    end
+    local components = type(player.components) == "table"
+        and player.components
+        or {}
+    local controller = components.playercontroller
+    if controller ~= nil and type(controller.Enable) == "function" then
+        ProtectedCall(controller.Enable, controller, false)
+    end
+    local health = components.health
+    if health ~= nil and type(health.SetInvincible) == "function" then
+        ProtectedCall(health.SetInvincible, health, true)
+    end
+    if components.trader ~= nil then
+        components.trader.enabled = false
+    end
+    if components.debuffable ~= nil then
+        components.debuffable.enable = false
+    end
+    if components.drownable ~= nil then
+        components.drownable.enabled = false
+    end
+    if components.burnable ~= nil then
+        components.burnable.canlight = false
+        components.burnable.lightningimmune = true
+    end
+    if components.freezable ~= nil then
+        components.freezable.coldness = 0
+    end
+    if components.hunger ~= nil then
+        components.hunger.burning = false
+    end
+    return true
+end
+
+local function GetParticipantPlayer(self, session)
+    if session == nil
+        or not IsNonEmptyString(session.target_userid)
+        or self.instance_manager == nil
+        or type(self.instance_manager.GetParticipant) ~= "function" then
+        return nil
+    end
+    local ok, participant = ProtectedCall(
+        self.instance_manager.GetParticipant,
+        self.instance_manager,
+        session.target_userid
+    )
+    if not ok then
+        return nil
+    end
+    if participant == nil then
+        return nil
+    end
+    local player = nil
+    if type(participant.GetPlayer) == "function" then
+        local ok, result = ProtectedCall(participant.GetPlayer, participant)
+        if ok then
+            player = result
+        end
+    end
+    player = player or participant.player_ref
+    return IsValidPlayer(player) and player or nil
+end
+
+local function UpdateFollow(self, session)
+    if session == nil
+        or session.state ~= SpectatorService.STATES.SPECTATING
+        or session.camera_mode ~= "FOLLOW"
+        or self.sessions_by_userid[session.userid] ~= session then
+        return false
+    end
+    if not MaintainPlayerGuard(session.player) then
+        return false
+    end
+    local target = GetParticipantPlayer(self, session)
+    if target == nil or target == session.player then
+        return false
+    end
+    local position = GetActualPlayerPosition(target)
+    if position == nil then
+        return false
+    end
+    local moved = SetPlayerPosition(session.player, position)
+    if moved then
+        session.follow_last_position = CopyValue(position)
+        session.follow_update_count = (session.follow_update_count or 0) + 1
+    end
+    return moved
+end
+
+local function StopFollowTask(self, session)
+    if session ~= nil and session.follow_task ~= nil
+        and type(session.follow_task.Cancel) == "function" then
+        ProtectedCall(session.follow_task.Cancel, session.follow_task)
+    end
+    if session ~= nil then
+        session.follow_task = nil
+    end
+end
+
+local function StartFollowTask(self, session)
+    StopFollowTask(self, session)
+    if session == nil or session.camera_mode ~= "FOLLOW"
+        or not IsNonEmptyString(session.target_userid) then
+        return true
+    end
+    UpdateFollow(self, session)
+    if self.world == nil or type(self.world.DoPeriodicTask) ~= "function" then
+        return true
+    end
+    local ok, task = ProtectedCall(
+        self.world.DoPeriodicTask,
+        self.world,
+        FOLLOW_UPDATE_PERIOD,
+        function()
+            ProtectedCall(UpdateFollow, self, session)
+        end
+    )
+    if ok and task ~= nil then
+        session.follow_task = task
+        return true
+    end
+    return false
 end
 
 function SpectatorService.Enter(self, player, instance_id, options)
@@ -710,6 +1415,9 @@ function SpectatorService.Enter(self, player, instance_id, options)
         entered_at = GetNow(self),
         target_userid = options.target_userid,
         player = player,
+        follow_task = nil,
+        follow_last_position = nil,
+        follow_update_count = 0,
     }
     local echo, echo_code = CreateEcho(self, echo_id, player, session)
     if echo == nil then
@@ -742,6 +1450,10 @@ function SpectatorService.Enter(self, player, instance_id, options)
     if self.runtime ~= nil and type(self.runtime.RefreshPlayerClassified) == "function" then
         self.runtime:RefreshPlayerClassified(player)
     end
+    if not StartFollowTask(self, session) then
+        self:Exit(userid, "spectator_follow_failed")
+        return nil, SpectatorService.ERROR_CODES.FOLLOW_TASK_FAILED
+    end
     return session
 end
 
@@ -756,6 +1468,7 @@ function SpectatorService.Exit(self, player_or_userid, reason, options)
         and player_or_userid
         or self.players_by_userid[userid]
         or session.player
+    StopFollowTask(self, session)
     self.sessions_by_userid[userid] = nil
     self.players_by_userid[userid] = nil
     if self.sessions_by_instance[session.instance_id] ~= nil then
@@ -804,6 +1517,11 @@ function SpectatorService.SetTarget(self, player_or_userid, target)
     end
     if target == nil then
         session.target_userid = nil
+        StopFollowTask(self, session)
+        if self.runtime ~= nil and session.player ~= nil
+            and type(self.runtime.RefreshPlayerClassified) == "function" then
+            self.runtime:RefreshPlayerClassified(session.player)
+        end
         return true
     end
     local target_userid = GetUserid(target)
@@ -826,7 +1544,19 @@ function SpectatorService.SetTarget(self, player_or_userid, target)
     if target_player ~= nil and target_player.is_spectator == true then
         return false, SpectatorService.TARGET_NOT_FOUND
     end
+    local old_target_userid = session.target_userid
     session.target_userid = target_userid
+    if old_target_userid ~= target_userid or session.follow_task == nil then
+        if not StartFollowTask(self, session) then
+            session.target_userid = old_target_userid
+            StartFollowTask(self, session)
+            return false, SpectatorService.ERROR_CODES.FOLLOW_TASK_FAILED
+        end
+    end
+    if self.runtime ~= nil and session.player ~= nil
+        and type(self.runtime.RefreshPlayerClassified) == "function" then
+        self.runtime:RefreshPlayerClassified(session.player)
+    end
     return true
 end
 
@@ -977,6 +1707,12 @@ function SpectatorService.Validate(self)
         if self.sessions_by_instance[session.instance_id] == nil
             or self.sessions_by_instance[session.instance_id][userid] ~= session then
             return false, SpectatorService.ERROR_CODES.INVALID_SERVICE
+        end
+        if type(session.player) ~= "table"
+            or session.player.is_spectator ~= true
+            or session.player.agon_spectator_guard_mode
+                ~= "HARD_NONINTERACTIVE_FOLLOW" then
+            return false, SpectatorService.ERROR_CODES.PLAYER_GUARD_FAILED
         end
     end
     return true

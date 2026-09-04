@@ -742,10 +742,11 @@ SpectatorRecord = {
 3. 把真实玩家放到目标 Instance 当前 ScenePlan revision 声明并验证通过的安全 spectator anchor；
 4. 隐藏真实实体、阴影和地图图标；
 5. 禁用物理、碰撞、受击、被选中和所有 gameplay action；
-6. 暂停玩家自身生命、饥饿、理智、温度等数值变化，但不改写现有数值；
-7. 阻止装备、技能、光源、光环、跟随者等对比赛产生效果；
-8. 客户端只开放观战相机和观战 UI；
-9. 服务端拒绝 Spectator 的动作、物品和玩法 RPC。
+6. 以 `notarget`、`noattack`、`invisible`、`noplayertarget`、`NOCLICK`、`noauradamage`、`noember`、`fireimmune` 等官方规则边界阻断怪物、伤害、技能和环境交互；这不是视觉隐藏：A 不能成为 AI 目标、受击目标、伤害/死亡/治疗入口、交易/喂食/诅咒/溺水/点火/冻结/雷击目标，也不能通过普通或绕过无敌的直接组件调用被改变；
+7. 暂停玩家自身生命、饥饿、理智、温度等数值变化，但不改写现有数值；
+8. 阻止装备、技能、光源、光环、跟随者等对比赛产生效果；A 的 ActionPicker、控制器和服务端 gameplay/RPC 入口都必须拒绝交互，其他实体也不能对 A 发起这些交互；
+9. 客户端只开放观战相机和观战 UI；
+10. 服务端拒绝 Spectator 的动作、物品和玩法 RPC。
 
 上述保护是运行时 guard，不是状态快照。任何保护项都必须成对撤销，并保持幂等。
 
@@ -789,7 +790,9 @@ EnterSpectating
 
 外观复制必须使用独立的只读 appearance data，不得把真实玩家的 inventory item、组件或 child entity 挂到残影上。换装、Mod 皮肤和重连行为需在实现阶段验证。
 
-仅调用 `PlayerController:Enable(false)` 不够，因为原版相机旋转/缩放也会检查 controller enabled。客户端需要专门的 spectator input layer：禁止行动输入，但保留旋转、缩放、切换目标和受限自由相机。
+仅调用 `PlayerController:Enable(false)` 不够，因为原版相机旋转/缩放也会检查 controller enabled。客户端需要专门的 spectator input layer：禁止行动输入，但保留旋转和缩放；不切换 `TheCamera`/`TheFocalPoint` 的 target。
+
+`FOLLOW` 模式由服务端每帧把 Spectator A 的真实玩家实体 Transform 同步到当前目标 Participant B 的真实玩家实体位置。A 始终是本地客户端的相机实体，因此官方相机会随 A 的位置自然更新；A 不承担碰撞、AI 目标、伤害或 gameplay 交互，也不能被任何怪物、伤害源或普通交互选中。目标暂时断线时 A 保持最后安全位置，目标重新绑定后由同一跟随任务继续同步。
 
 观战相机支持：
 
@@ -798,7 +801,7 @@ EnterSpectating
 - 不允许跨 Zone 查看另一个 Instance；
 - GameMode 可配置是否允许观战、观战人数、团队视角和延迟策略。
 
-为了获得远端 Zone 的网络实体，隐藏玩家需要始终位于需要观察的视野的中央。
+为了获得远端 Zone 的网络实体，隐藏玩家需要始终位于需要观察的视野的中央；这通过服务端的 A→B Transform 同步实现，而不是通过客户端更换相机目标实现。
 
 索引：
 

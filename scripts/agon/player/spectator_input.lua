@@ -154,9 +154,11 @@ function SpectatorInput.Install(controller)
     end
     local original = controller.DoCameraControl
     controller.DoCameraControl = function(self, ...)
-        if self.ismastersim ~= true and IsLocalSpectator(self.inst) then
-            DoSpectatorCameraControl(self)
-            return
+        if self.ismastersim ~= true then
+            if IsLocalSpectator(self.inst) then
+                DoSpectatorCameraControl(self)
+                return
+            end
         end
         return original(self, ...)
     end
