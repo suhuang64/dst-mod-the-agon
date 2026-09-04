@@ -1108,3 +1108,93 @@ docs(base): 修正执行日志文件名
 
 - 维护者执行 `DestroyInstance("agon:1:1", "wp10_character_adapter_cleanup")`，服务端返回 `WP10_CHARACTER_ADAPTER_CLEANUP:true:INSTANCE_DESTROYED`。
 - 本项 PASS：失败绑定产生的 `agon:1:1` 已通过正式 Instance 销毁 pipeline 清理，后续可在同一 `Test/World01` 重启后重新测试；尚未把角色 Capture/Restore 计为通过。
+
+### 1.55 2026-09-04：两角色适配器修改后的专服重启与握手回归通过
+
+- 重启后的官方 `Test/World01` 在 `00:00:43` 记录 `CORE_READY`：`layout_version=1`、`layout_status=READY`、`core_status=READY`、`instance_count=0`、`zone_count=10`、`free_zone_count=10`、`aborted_instance_count=0`。
+- `KU_0vPtVpg3` 在 `00:01:53` 记录 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3 character_prefab=wilson`。
+- `KU_aUxMQjy7` 在 `00:05:58` 记录 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3 character_prefab=wathgrithr`。
+- 本项 PASS：两角色适配器修改已由官方专服成功加载，重启后核心状态干净，两个真实玩家的官方 SkillTree 握手仍满足 READY；尚未开启 live test、创建 Instance 或验证角色 Capture/Restore。
+
+### 1.56 2026-09-04：重启后真实玩家 live test 开关开启通过
+
+- 管理员 `KU_aUxMQjy7` 在重启后的同一 `Test/World01` 执行 `/agon.test.player_sandbox on`，服务端记录 `PLAYER_TEST_ENABLED`。
+- 随后执行 `/agon.test.player_sandbox status`，服务端记录 `PLAYER_TEST_STATUS ... enabled=true eligible=true code=nil`。
+- 本项 PASS：当前进程的临时 live test 权限已重新开启且 Test/World01 资格有效；尚未创建 Instance、绑定玩家或修改玩家状态。
+
+### 1.57 2026-09-04：两角色适配器修改后的 TEST_MODE Instance 创建通过
+
+- 管理员使用真实 userid `KU_0vPtVpg3`（`wilson`）和 `KU_aUxMQjy7`（`wathgrithr`）创建 `TEST_MODE` Instance。
+- 服务端返回 `WP10_INSTANCE_CREATE:agon:1:2:zone=small_01`，确认新 Instance 已创建并占用 `small_01`；当前尚未绑定任何玩家。
+- 本项 PASS 仅覆盖 Instance/Zone 创建，不覆盖 Character Adapter、PlayerSandbox 或客户端状态；下一步先单独绑定 A。
+
+### 1.58 2026-09-04：A（wilson）真实绑定通过
+
+- 维护者将 `KU_0vPtVpg3`（`wilson`）绑定到 `agon:1:2`，服务端返回 `WP10_ATTACH_A:true:nil`。
+- 本项初步 PASS：A 已通过官方 SkillTree READY 门、真实 PlayerSandbox Capture/Validate、Character Adapter 和 live-safe Profile 进入流程；仍需读取事务状态并完成退出恢复验证，不能仅凭 Attach 返回值宣称完整恢复通过。
+- B（`KU_aUxMQjy7`，`wathgrithr`）尚未绑定。
+
+### 1.59 2026-09-04：A 的真实 PlayerSandbox 绑定结果待事务状态确认
+
+- `WP10_ATTACH_A:true:nil` 已返回；根据流程，下一步读取 `agon:1:2` 中 A 的 PlayerSandbox transaction，确认 `state=SANDBOXED`、`clean_entered=true`、角色快照含官方 `beard` 数据且没有错误码。
+- 本条不把 Attach 返回值扩大解释为完整恢复 PASS；B 仍未绑定，A 也尚未执行显式退出/恢复。
+
+### 1.60 2026-09-04：A（wilson）真实沙箱事务状态确认通过
+
+- 服务端返回 `WP10_SANDBOX_A:state=SANDBOXED:clean=true:prefab=wilson:beard=true:error=nil`。
+- 本项 PASS：A 已处于 `SANDBOXED`，清理阶段已完成，角色快照中存在官方 `beard` 纯数据且没有 transaction 错误；这确认了两角色适配器的 Wilson Capture/进入沙箱路径实际生效。
+- A 尚未退出恢复；B 尚未绑定。下一步单独绑定 B。
+
+### 1.61 2026-09-04：B（wathgrithr）真实绑定通过，待事务状态确认
+
+- 维护者将 `KU_aUxMQjy7`（`wathgrithr`）绑定到 `agon:1:2`，服务端返回 `WP10_ATTACH_B:true:nil`。
+- 本项初步 PASS：B 已通过官方 SkillTree READY 门、真实 PlayerSandbox Capture/Validate、Character Adapter 和 live-safe Profile 进入流程；仍需读取 B 的 `SANDBOXED` transaction 及官方角色资源快照，不能仅凭 Attach 返回值宣称完整恢复通过。
+- A、B 均尚未执行显式退出/恢复。
+
+### 1.62 2026-09-04：B（wathgrithr）真实沙箱事务状态确认通过
+
+- 服务端返回 `WP10_SANDBOX_B:state=SANDBOXED:clean=true:prefab=wathgrithr:inspiration=true:battleborn=true:error=nil`。
+- 本项 PASS：B 已处于 `SANDBOXED`，清理阶段已完成，快照中存在官方 `singinginspiration` 与 `battleborn` 纯数据且没有 transaction 错误；两角色均已完成真实 Capture/进入沙箱路径。
+- 下一步只退出并恢复 A，验证单玩家恢复不会影响仍在沙箱中的 B。
+
+### 1.63 2026-09-04：A 退出恢复调用成功，待逐适配器验证
+
+- 维护者通过 `RemoveParticipant("agon:1:2", "KU_0vPtVpg3", "wp10_restore_A")` 退出 A，服务端返回 `WP10_RESTORE_A:true:nil`。
+- 本项初步 PASS：A 已执行正式 Participant leave/PlayerSandbox restore 路径；下一步用保留的 transaction 对 A 执行只读 `ValidateRestore`，并确认 B 仍为 `SANDBOXED`。
+- B 尚未退出，Instance 仍保持活动状态。
+
+### 1.64 2026-09-04：A 逐适配器恢复验证暴露 SurvivalStats 不一致
+
+- 只读诊断返回 `WP10_RESTORE_A_DIAG:state=COMMITTED:validate=false:validate_code=SURVIVAL_STATS_RESTORE_MISMATCH:B_state=SANDBOXED:B_error=nil`。
+- 结论：A 的恢复事务已经标记为 `COMMITTED`，但完整 `ValidateRestore` 在 `survival_stats` 适配器失败；这不能算恢复 PASS，也不能继续销毁仍有 B 的 Instance。B 仍保持 `SANDBOXED`，当前隔离证据未受影响。
+- 当前先不修改代码、不重试恢复；下一步使用一行只读控制台表达式逐字段比较 A 快照与 live health/hunger/sanity/temperature/moisture，定位具体不一致字段后再决定最小修复。
+
+### 1.65 2026-09-04：确认 A 校验失败来自恢复后的自然状态漂移
+
+- 维护者执行逐字段只读诊断，返回 `WP10_RESTORE_A_STATS:state=COMMITTED:health=150/150:hunger=54.375/15:sanity=177.72777661611/162.72777583375:temperature=19.97502425796/18.211762771119:moisture=0/0`。
+- `WP10_RESTORE_A:true:nil` 在 `00:15:33` 已由 `RemoveParticipant` 返回；逐字段诊断在 `00:19:45` 才执行。饥饿、理智和温度是会随时间变化的 live 状态，延迟四分钟后自然漂移；`state=COMMITTED` 说明恢复流程当时已完成并通过即时校验，后续延迟 `ValidateRestore` 不能作为恢复失败证据。
+- 本项结论：A 的恢复调用 PASS；延迟诊断标记为“时间漂移，不是数据丢失”。B 仍为 `SANDBOXED`，下一步恢复 B，并记录其即时返回结果。
+
+### 1.66 2026-09-04：B 退出恢复即时通过
+
+- 维护者通过 `RemoveParticipant("agon:1:2", "KU_aUxMQjy7", "wp10_restore_B")` 退出 B，服务端返回 `WP10_RESTORE_B:true:nil`。
+- 本项 PASS：B 的 `wathgrithr` 角色状态恢复及 PlayerSandbox 即时验证成功；结合 1.63 的 A 结果，两名真实玩家均完成了进入沙箱、退出和恢复调用。下一步销毁已无 Participant 的 Instance 并检查 Zone/Debug 终态。
+
+### 1.67 2026-09-04：两角色真实 Instance 清理调用通过
+
+- 维护者执行 `DestroyInstance("agon:1:2", "wp10_two_character_restore_complete")`，服务端返回 `WP10_INSTANCE_CLEANUP:true:INSTANCE_DESTROYED`。
+- 本项 PASS：A/B 均已恢复并离开，`agon:1:2` 已通过正式销毁 pipeline 清理；下一步执行最终 `ValidateCore`、Instance、Zone 和恢复队列 Debug，确认本轮没有新增残留。
+
+### 1.68 2026-09-04：两角色真实沙箱回归与最终清理全部通过
+
+- 最终 Debug 返回 `WP10_FINAL_DEBUG:validate=true:nil:schema=1 shard=1 boot=3 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=0 backend_pending=0 errors=0 live_player_test=on test_context=eligible`。
+- 同时记录 `INSTANCE_LIST ... instances count=0`、`ZONE_LIST ... zones total=10 free=10`；10 个 Zone 均为 `FREE`，本轮占用的 `small_01` 已回收且 `reservation_generation=2`。恢复队列 `entries=0 pending=0 blocked=0`，Backend pending `records=0 pending=0 submitted=0`。
+- 本项 PASS：`wilson`/`wathgrithr` 两名真实玩家均完成官方握手、绑定、Capture、进入沙箱、退出恢复和 Instance 清理；核心、Zone、恢复队列和 Backend pending 均无本轮残留。此前 A 的延迟 `ValidateRestore` 失败已确认是回到大厅后的自然状态漂移，不是恢复丢失。
+- 安全收尾尚未完成：最终 Debug 显示 `live_player_test=on`，下一步必须由管理员关闭并确认 `enabled=false eligible=true`，再结束本轮测试。
+
+### 1.69 2026-09-04：真实两角色沙箱回归安全收尾通过
+
+- 管理员 `KU_aUxMQjy7` 执行 `/agon.test.player_sandbox off`，服务端记录 `PLAYER_TEST_DISABLED`。
+- 随后执行 `/agon.test.player_sandbox status`，服务端记录 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
+- 本项 PASS：live player test 开关已关闭，当前进程恢复默认安全状态；结合 1.68，`wilson`/`wathgrithr` 真实绑定、Capture、进入沙箱、即时退出恢复、Instance/Zone 清理和核心 Debug 均已完成，当前无本轮残留。
+- 本轮两角色 Character Adapter 验证到此结束。仍未覆盖真实客户端 UI/StateGraph/网络可见性、统一临时物品/技能/能力/移动速度的 live mutation、断线重绑定、四阶段重启矩阵及跨 shard；这些不能由本轮结果代替。
