@@ -240,7 +240,13 @@ function RestoreQueue.Enqueue(self, transaction, participant)
         if user_existing.transaction_id == transaction.transaction_id then
             return true, "ALREADY_ENQUEUED"
         end
-        return false, RestoreQueue.ERROR_CODES.DUPLICATE_USER
+        if user_existing.state == RestoreQueue.STATES.RESTORED then
+            -- 已验证完成的历史事务不应阻塞同一玩家后续新 Instance 的
+            -- transaction；保留 pending/blocked 记录的重复用户保护。
+            RemoveEntryIndex(self, user_existing)
+        else
+            return false, RestoreQueue.ERROR_CODES.DUPLICATE_USER
+        end
     end
 
     local entry, entry_code = MakeEntry(transaction, participant)

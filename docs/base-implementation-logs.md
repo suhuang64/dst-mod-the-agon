@@ -1583,3 +1583,32 @@ docs(base): 修正执行日志文件名
 - `InstanceManager.AttachPlayer()` 在 Participant 原状态为 `DISCONNECTED` 且事务符合上述断线条件时改走 `RebindPlayer()`；其他首次进入和非断线恢复仍走原 `Enter()`。
 - `AgonRuntime` 现在在官方 SkillTree 握手尚未 READY 时延迟 Participant Attach，并在 `ms_skilltreeinitialized` 到达后执行活动 Instance 的重连接线；成功时输出 `PLAYER_RECONNECTED`，失败仍保留原错误码和 Participant 隔离。
 - 静态 `git diff --check` 通过；当前尚未重启专服加载新 Lua，尚未重新执行真实 A 重连验收。
+
+### 2.40 2026-09-04：修复后重启及旧测试恢复结果
+
+- 维护者重启 `Test/World01` 并让 A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 重新加入；新进程输出 `STARTED`、`LAYOUT_READY` 和 `CORE_READY`。
+- 旧 `agon:1:7` 按 `ABORT_ON_RESTART` 中止；启动时输出 `RECOVERY_PARTIAL ... aborted_instance_count=1 pending_restore_count=1 quarantined_zone_count=1`。A 的重连恢复先因握手未完成返回 `SKILLTREE_HANDSHAKE_REQUIRED`，官方握手到达后输出 `RESTORE_COMPLETE`，其恢复队列已完成。
+- B 已重新加入并完成官方握手；当前尚未用 Runtime Debug 确认被隔离 Zone 的具体状态和恢复队列最终计数。下一步先执行 `ValidateCore`、Instance/Zone/Recovery Debug，再继续新断线重绑定验收。
+
+### 2.41 2026-09-04：重启后确认旧 Zone 处于 QUARANTINED
+
+- 维护者执行 Runtime 基线诊断，服务端返回 `WP10_RESTART_BASE:true:nil`；`instances count=0`、`restore_queue pending=0 blocked=0`、`backend pending=0`、`errors=0`。
+- `small_01` 当前为 `QUARANTINED`，owner 仍为旧 `agon:1:7`，`free=9`；其余 9 个 Zone 为 `FREE`。Runtime 核心验证通过不等于该 Zone 可重新分配。
+- 本项确认旧测试的失败恢复已被安全隔离，尚未执行任何强制释放；下一步只读取 `quarantine_reason`/`recovery_failures`，再决定使用正式修复流程还是重建可丢弃的 `Test/World01` 测试存档。
+
+### 2.42 2026-09-04：恢复队列重复用户缺口定位
+
+- 维护者读取 `small_01` 的隔离信息；服务端返回 `state=QUARANTINED`、`owner=agon:1:7`、`reason=restart_recovery_failed:RESTORE_QUEUE_DUPLICATE_USER`，`recovery_failures` 同样记录该 Instance/Zone 和错误码。
+- 原因是同一用户历史上已验证完成的 `RESTORED` 队列记录仍被保留；新 Instance 生成不同 transaction 后，`RestoreQueue.Enqueue()` 将该终态记录误判为 `DUPLICATE_USER`。pending/blocked 记录的重复用户保护仍应保留。
+- 本项判定为 WP9 恢复队列实现缺陷，当前不强制释放已隔离 Zone；下一步修复终态记录替换逻辑，并在干净 `Test/World01` 状态重新验证重启清理。
+
+### 2.43 2026-09-04：恢复队列终态替换修复已实现
+
+- `RestoreQueue.Enqueue()` 已调整：同一 userid 存在不同 transaction 时，若旧记录状态为 `RESTORED` 则先移除旧索引并接纳新 transaction；`RESTORE_PENDING`/`RESTORE_BLOCKED` 仍返回 `RESTORE_QUEUE_DUPLICATE_USER`。
+- 该修复解决历史已完成恢复记录阻塞后续 Instance 的问题，不改变未验证 snapshot 的保留和重复用户安全门；当前已完成静态补丁，尚未用新进程重新执行恢复/Zone 清理。
+
+### 2.44 2026-09-04：重启后基线诊断确认需重建测试世界
+
+- 维护者在修复后进程执行 `WP10_RESTART_BASE`；`ValidateCore=true`、`instances=0`、恢复队列 `pending=0 blocked=0`、Backend `pending=0`，但 `small_01` 仍为旧 `agon:1:7` 所有的 `QUARANTINED`。
+- 隔离原因已确认为 `restart_recovery_failed:RESTORE_QUEUE_DUPLICATE_USER`；当前代码没有允许从 `QUARANTINED` 直接转为 `FREE` 的接口，符合“未完成实体/地形验证不得强制释放”的安全边界。
+- 修复后的 `RestoreQueue` 尚未加载到当前进程；下一步先正常关闭并重启以加载修复，再仅对可丢弃的 `Test/World01` 执行官方 `c_regenerateworld()`，获得 10 个空闲 Zone 后重新开始断线重绑定验收。
