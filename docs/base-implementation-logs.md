@@ -1315,3 +1315,82 @@ docs(base): 修正执行日志文件名
 - 维护者提供的逐 Session 诊断确认：A=`KU_0vPtVpg3`、B=`KU_aUxMQjy7` 均为 `state=LOBBY`、`point=0`、`tile=200,200`；两者返回坐标不同但都被映射到同一个 Portal Tile，因此触发 `LobbyService:Validate()` 的重复 Tile 拒绝。
 - 修改 `scripts/agon/world/lobby_service.lua`：`LobbyService.Enter()` 不再把任意大厅当前位置直接登记为 `point_index=0`；仅当当前位置正好对应一个未占用的正式 `spawn_and_return_points` 时才保留，否则使用 `GetSafePoint()` 的安全、未占用、round-robin 分配。Session 的 `return_position` 统一使用最终选定点，避免保留 Portal 中心等无效返回坐标。
 - `git diff --check` 通过；当前没有 Lua/Luac 命令可用，尚未把修复加载到正在运行的专服。下一步重启同一官方 `Test/World01` 以加载 Lua 修改，两个真实玩家重新加入后复查大厅点唯一性与 `ValidateCore`。
+
+### 1.90 2026-09-04：跨重启大厅修复复测更换真实玩家
+
+- 原 A=`KU_0vPtVpg3` 本轮无法继续参与；维护者确认新的 A=`KU_dNpFmz1P` 与 B=`KU_aUxMQjy7` 已进入同一官方 `Test/World01`。
+- 后续复测统一使用 A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7`；先验证重启后两个大厅 Session 的正式点唯一性和 `ValidateCore`，再继续真实 Instance/PlayerSandbox 流程。
+
+### 1.91 2026-09-04：大厅点冲突修复在新玩家重连后通过
+
+- 维护者执行大厅修复检查；结果为 `WP10_LOBBY_FIX_CHECK:validate=true:nil`。
+- A=`KU_dNpFmz1P` 处于 `LOBBY`、`point=3`、`tile=200,203`；B=`KU_aUxMQjy7` 处于 `LOBBY`、`point=2`、`tile=197,200`。两个 Session 使用不同的正式安全点，均不再占用 Portal Tile `200,200`。
+- 本项 PASS：重启后的大厅唯一点分配和 Core 校验已通过；下一步开启真实玩家沙箱开关，重新验证 A/B 的 Instance 绑定、角色适配器清理与恢复。
+
+### 1.92 2026-09-04：新双玩家真实沙箱开关已开启
+
+- 直接读取官方 `server_log.txt`；管理员 B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox on` 后，服务端记录 `[PLAYER_TEST_ENABLED] ... operation=live_player_test_on`。
+- 当前开关只对之后创建的 TestMode Instance 生效；A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 已完成大厅唯一点复测，下一步创建双玩家 `TEST_MODE` Instance 并逐个绑定。
+
+### 1.93 2026-09-04：新双玩家真实测试 Instance 创建通过
+
+- 维护者执行创建命令；服务端公告 `WP10_INSTANCE_CREATE:agon:1:4:zone=small_01`。
+- `agon:1:4` 已成功分配 `small_01`，尚未绑定玩家；下一步先绑定 A=`KU_dNpFmz1P`，再检查其 `SANDBOXED` 与 `wilson` Character Adapter 状态。
+
+### 1.94 2026-09-04：新 A 玩家绑定调用通过
+
+- 维护者将 A=`KU_dNpFmz1P` 绑定到 `agon:1:4`，服务端公告 `WP10_ATTACH_A:true:nil`。
+- 本项为绑定调用初步 PASS；下一步读取 A 的 `player_sandbox` transaction，确认 `SANDBOXED`、`clean_entered=true`、`character_prefab=wilson` 和 Wilson Character Adapter 快照无错误。
+
+### 1.95 2026-09-04：新 A 玩家真实沙箱事务通过
+
+- 维护者读取 A=`KU_dNpFmz1P` 的事务；服务端返回 `WP10_SANDBOX_A:state=SANDBOXED:clean=true:prefab=wilson:beard=true:error=nil`。
+- 本项 PASS：A 已完成真实 Capture、清理和进入沙箱；Wilson Character Adapter 的 `beard` 快照存在且 transaction 无错误。下一步绑定 B=`KU_aUxMQjy7`。
+
+### 1.96 2026-09-04：新 B 玩家绑定调用通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:4`，服务端公告 `WP10_ATTACH_B:true:nil`。
+- 本项为绑定调用初步 PASS；下一步读取 B 的 `player_sandbox` transaction，确认 `SANDBOXED`、`clean_entered=true`、`character_prefab=wathgrithr` 以及 `singinginspiration`/`battleborn` 角色快照无错误。
+
+### 1.97 2026-09-04：新 B 玩家真实沙箱事务通过
+
+- 维护者读取 B=`KU_aUxMQjy7` 的事务；服务端返回 `WP10_SANDBOX_B:state=SANDBOXED:clean=true:prefab=wathgrithr:inspiration=true:battleborn=true:error=nil`。
+- 本项 PASS：A=`KU_dNpFmz1P` 与 B=`KU_aUxMQjy7` 均已完成真实 Capture、清理和进入沙箱；两名角色的官方 Character Adapter 快照均存在且 transaction 无错误。下一步只退出并恢复 A，验证 B 仍保持 `SANDBOXED`。
+
+### 1.98 2026-09-04：新 A 玩家退出恢复调用通过
+
+- 维护者通过 `RemoveParticipant("agon:1:4", "KU_dNpFmz1P", "wp10_restore_A")` 退出 A，服务端公告 `WP10_RESTORE_A:true:nil`。
+- 本项为正式恢复调用初步 PASS；下一步立即读取 A transaction 的 `COMMITTED` 与 `ValidateRestore` 结果，同时确认 B 仍为 `SANDBOXED`，避免把延迟后的 SurvivalStats 自然变化误判为恢复失败。
+
+### 1.99 2026-09-04：新 A 恢复即时通过，延迟校验再次证实为生存值漂移
+
+- 维护者在 `04:15:32` 执行 A=`KU_dNpFmz1P` 的 `RemoveParticipant`，返回 `WP10_RESTORE_A:true:nil`；按 `SandboxService.RestoreOriginal()` 语义，这表示适配器恢复及恢复时即时校验均成功，transaction 进入 `COMMITTED`。
+- 维护者在 `04:16:11` 读取延迟状态，返回 `state=COMMITTED:validate=false:validate_code=SURVIVAL_STATS_RESTORE_MISMATCH`；同一结果显示 B participant 为 `READY`、B transaction 仍为 `SANDBOXED` 且无错误。该延迟校验不能推翻 A 的即时恢复 PASS，属于实时 SurvivalStats 在大厅中继续变化造成的严格相等校验不再成立。
+- 本项 PASS：A 已恢复且 B 仍被隔离在沙箱；下一步恢复 B，再执行 Instance 清理和最终 Core/Zone/Recovery Debug。
+
+### 2.00 2026-09-04：新 B 玩家恢复调用通过
+
+- 维护者通过 `RemoveParticipant("agon:1:4", "KU_aUxMQjy7", "wp10_restore_B")` 退出 B，服务端公告 `WP10_RESTORE_B:true:nil`。
+- 本项 PASS：A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 均已完成真实 PlayerSandbox 进入、退出恢复和 Character Adapter 还原；下一步销毁 `agon:1:4` 并验证 Zone、恢复队列、Backend 与 Core 终态。
+
+### 2.01 2026-09-04：新双玩家测试 Instance 清理调用通过
+
+- 维护者通过 `DestroyInstance("agon:1:4", "wp10_two_player_restore_complete")` 清理测试 Instance，服务端公告 `WP10_INSTANCE_CLEANUP:true:INSTANCE_DESTROYED`。
+- 本项 PASS：两名玩家均已恢复后，`agon:1:4` 正式销毁；下一步执行最终 `ValidateCore`、Instance/Zone/Recovery/Backend Debug，确认没有残留。
+
+### 2.02 2026-09-04：大厅修复后的双玩家完整回归与资源清理通过
+
+- 维护者执行最终 Debug；服务端返回 `WP10_FINAL_DEBUG:validate=true:nil`，`instances count=0`、`zones total=10 free=10`、`restore_queue entries=2 pending=0 blocked=0`、`backend_adapter records=0 pending=0 submitted=0`。
+- `small_01` 已释放且 `reservation_generation=4`；Runtime Debug 为 `core=READY`、`instances=0`、`zones=10`、`restores=0`、`backend_pending=0`、`errors=0`。本轮替换 A=`KU_dNpFmz1P` 后，真实双玩家大厅点唯一性、绑定、角色适配器、沙箱进入/恢复、Instance 销毁和最终清理均通过。
+- 当前唯一待收尾状态是 `live_player_test=on`；下一步关闭开关并确认 `enabled=false eligible=true`，再结束本轮测试。
+
+### 2.03 2026-09-04：真实玩家沙箱开关关闭调用通过
+
+- 管理员 B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox off`；服务端记录 `[PLAYER_TEST_DISABLED] ... operation=live_player_test_off`。
+- 本项关闭调用 PASS；下一步执行 `status` 确认当前进程已恢复为默认安全状态 `enabled=false eligible=true`。
+
+### 2.04 2026-09-04：新双玩家大厅修复回归安全收尾完成
+
+- 管理员执行 `/agon.test.player_sandbox status`；服务端返回 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
+- 本轮最终结论：大厅重连后的 Portal Tile 冲突已修复；A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 完成大厅唯一点分配、真实绑定、Wilson/Wathgrithr Character Adapter 快照、PlayerSandbox 进入与恢复、Instance 销毁，以及最终 `ValidateCore=true`/10 个 Zone 全部空闲/恢复队列和 Backend 清空。
+- 测试开关已关闭，运行时恢复默认安全状态；本轮所有执行细节继续保存在本日志中。
