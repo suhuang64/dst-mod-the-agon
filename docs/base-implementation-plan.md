@@ -1287,6 +1287,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 已补齐上述两条接线：客户端 Spectator 通过 classified `agon_spectator_active` 绕过官方 `DoCameraControl()` 的 disabled 早退但不恢复 gameplay input；InstanceManager 在初始启动和运行中重连时按 `ScenePlan.participant_spawn_points` 移动真实 Participant，并由 Attach 清理大厅会话。重启后的真实双客户端验证仍未完成。
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
+- 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit

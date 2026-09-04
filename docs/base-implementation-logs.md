@@ -1845,3 +1845,24 @@ docs(base): 修正执行日志文件名
 
 - 修改涉及 `base-design.md`、`base-implementation-plan.md`、`instance_manager.lua`、`zone.lua`、`zone_manager.lua` 与本执行日志；`git diff --check` 通过，仅有 Git 的 LF/CRLF 提示。
 - 未安装或执行全局 Lua 工具；当前仍需通过真实服务器重启恢复日志验证运行时行为。
+
+### 2.88 2026-09-04：补丁加载后的恢复基线需核对遗留 Zone
+
+- 重启日志确认 `STARTED`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY` 均成功，且 `quarantined_zone_count=0`、`pending_restore_count=0`、`instance_count=0`。
+- 但 `CORE_READY` 显示 `zone_count=10 free_zone_count=9`，说明仍有一个 Zone 未回到 FREE；下一步读取 `small_01` 的状态/owner、实例索引和 `ValidateCore()`，再决定是否需要受控收尾。
+
+### 2.89 2026-09-04：确认孤立 QUARANTINED Zone
+
+- `WP10_RECOVERY_DIAG` 返回 `validate=true`、`instance=nil`、`zone_state=QUARANTINED`、`owner=agon:1:3`、`small_free=3`；Zone Debug 进一步确认 `small_01` 是唯一隔离 Zone，活动 Instance 和 pending restore 均为空。
+- 该状态不能通过普通 `DestroyInstance()` 或 `RecoverOnRestart()` 清理：没有活动 Instance 可重试，也没有保存快照可恢复；必须增加受控孤立 Zone 修复入口，验证清场后再释放。
+
+### 2.90 2026-09-04：增加孤立隔离 Zone 的受控恢复入口
+
+- `InstanceManager.RecoverOrphanedZone(zone_id, instance_id, reason)` 仅接受匹配 owner 的 `QUARANTINED` Zone，并拒绝仍有活动 Instance 的情况。
+- 该入口复用 `SceneService:RecoverSnapshot()`：拒绝 Zone 内玩家、清理非玩家实体、清回 `IMPASSABLE` 并验证 Zone 为空，成功后才调用 `ReleaseRecovered()`；不允许直接写入 FREE。
+- 已同步更新 design/plan；下一步重启加载本入口，然后对 `small_01` 执行受控恢复并核验 `free=10`、`ValidateCore=true`。
+
+### 2.91 2026-09-04：孤立 Zone 恢复补丁静态检查通过
+
+- `WP10_RECOVERY_DIAG` 已确认 `small_01` 为无活动 Instance 的孤立 `QUARANTINED` Zone；受控恢复入口已加入 `InstanceManager`，`git diff --check` 通过。
+- 当前服务器尚未加载该入口；保存现有 Zone 状态并重启后，执行 `RecoverOrphanedZone("small_01", "agon:1:3", ...)`，成功标准为 `ZONE_RECOVERED`、`free=10`、`ValidateCore=true`。

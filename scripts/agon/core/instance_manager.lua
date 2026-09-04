@@ -62,6 +62,7 @@ local function AttachMethods(manager)
     manager.GetInstanceDebugData = InstanceManager.GetInstanceDebugData
     manager.GetParticipant = InstanceManager.GetParticipant
     manager.GetParticipantInstanceId = InstanceManager.GetParticipantInstanceId
+    manager.RecoverOrphanedZone = InstanceManager.RecoverOrphanedZone
     manager.AddParticipant = InstanceManager.AddParticipant
     manager.AttachPlayer = InstanceManager.AttachPlayer
     manager.PositionParticipant = InstanceManager.PositionParticipant
@@ -291,6 +292,64 @@ end
 function InstanceManager.GetParticipantInstanceId(self, userid)
     local participant = self:GetParticipant(userid)
     return participant ~= nil and participant.instance_id or nil
+end
+
+function InstanceManager.RecoverOrphanedZone(self, zone_id, instance_id, reason)
+    if not IsNonEmptyString(zone_id) or not IsNonEmptyString(instance_id) then
+        return false, InstanceManager.ERROR_CODES.INVALID_INSTANCE_SNAPSHOT
+    end
+    local zone = self.zone_manager:Get(zone_id)
+    if zone == nil then
+        return false, "ZONE_NOT_FOUND"
+    end
+    if zone.state ~= "QUARANTINED"
+        or zone.reserved_instance_id ~= instance_id then
+        return false, "ZONE_QUARANTINE_OWNER_MISMATCH"
+    end
+    if self:Get(instance_id) ~= nil then
+        return false, "INSTANCE_STILL_ACTIVE"
+    end
+    for index = 1, #self.instance_order do
+        local active_instance = self.instances_by_id[self.instance_order[index]]
+        if active_instance ~= nil and active_instance.zone_id == zone_id then
+            return false, "INSTANCE_STILL_ACTIVE"
+        end
+    end
+    if self.scene_service == nil
+        or type(self.scene_service.RecoverSnapshot) ~= "function" then
+        return false, InstanceManager.ERROR_CODES.RECOVERY_FAILED
+    end
+
+    -- 没有可恢复的 Instance 快照时仍不直接改 FREE；复用场景恢复流程，
+    -- 先拒绝 Zone 内玩家、清理非玩家实体、清回 IMPASSABLE 并验证为空。
+    local snapshot =
+    {
+        instance_id = instance_id,
+        scene =
+        {
+            scope =
+            {
+                scope_id = instance_id .. ":orphan_recovery",
+            },
+            scene_revision = 0,
+        },
+    }
+    local cleaned, clean_code = self.scene_service:RecoverSnapshot(
+        snapshot,
+        zone,
+        reason or "orphan_quarantine_recovery"
+    )
+    if not cleaned then
+        return false, clean_code or InstanceManager.ERROR_CODES.RECOVERY_FAILED
+    end
+    local released, release_code = self.zone_manager:ReleaseRecovered(
+        zone_id,
+        instance_id
+    )
+    if not released then
+        return false, release_code or InstanceManager.ERROR_CODES.RECOVERY_FAILED
+    end
+    return true, "ZONE_RECOVERED"
 end
 
 function InstanceManager.AddParticipant(self, instance_id, userid, options)
