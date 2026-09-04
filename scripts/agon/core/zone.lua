@@ -37,7 +37,7 @@ Zone.TRANSITIONS =
     BUILDING = { ACTIVE = true, RESETTING = true, QUARANTINED = true },
     ACTIVE = { RESETTING = true, QUARANTINED = true },
     RESETTING = { FREE = true, QUARANTINED = true },
-    QUARANTINED = {},
+    QUARANTINED = { RESETTING = true },
 }
 
 Zone.ERROR_CODES =
@@ -179,6 +179,18 @@ end
 
 function Zone.BeginResetting(self, instance_id, reason)
     return TransitionOwned(self, Zone.STATES.RESETTING, instance_id, reason or "resetting")
+end
+
+function Zone.BeginQuarantinedRecovery(self, instance_id, reason)
+    if self.state ~= Zone.STATES.QUARANTINED then
+        return false, Zone.ERROR_CODES.ZONE_STATE_INVALID
+    end
+    return TransitionOwned(
+        self,
+        Zone.STATES.RESETTING,
+        instance_id,
+        reason or "quarantined_recovery"
+    )
 end
 
 function Zone.ReleaseReservation(self, instance_id)

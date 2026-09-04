@@ -1196,6 +1196,7 @@ NEW → CAPTURED → SANDBOXED → RESTORING → RESTORED → COMMITTED
 ### 10.4 Zone 清理失败
 
 Zone 清空验证失败时进入 `RESETTING → QUARANTINED`。它不再参与自动分配，但其他 Zone 和 Instance 继续运行。管理员修复后必须重新执行“实体清理 + Tile 清回 `IMPASSABLE` + validation”，不能直接标记 FREE。
+同一 Instance 的显式销毁重试或 `ABORT_ON_RESTART` 恢复，只有在完成上述场景清理并验证 Zone 为空后，才允许把匹配 owner 的 `QUARANTINED` 受控转为 `RESETTING → FREE`；不得绕过验证直接改为 FREE。
 
 ---
 

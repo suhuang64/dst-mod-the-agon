@@ -32,6 +32,7 @@ InstanceManager.ERROR_CODES =
     SCENE_RESET_FAILED = "SCENE_RESET_FAILED",
     PARTICIPANT_SPAWN_POINT_UNAVAILABLE = "PARTICIPANT_SPAWN_POINT_UNAVAILABLE",
     PARTICIPANT_SPAWN_FAILED = "PARTICIPANT_SPAWN_FAILED",
+    PARTICIPANT_LOBBY_RETURN_FAILED = "PARTICIPANT_LOBBY_RETURN_FAILED",
     RECOVERY_FAILED = "RECOVERY_FAILED",
 }
 
@@ -896,9 +897,65 @@ local function CleanupZone(self, instance)
     elseif zone.state == "RESETTING" then
         return self.zone_manager:Release(zone.zone_id, instance.instance_id)
     elseif zone.state == "QUARANTINED" then
-        return false, "ZONE_QUARANTINED"
+        if instance.lifecycle_state ~= Instance.STATES.DESTROYING
+            or zone.reserved_instance_id ~= instance.instance_id
+            or type(self.zone_manager.BeginQuarantinedRecovery) ~= "function" then
+            return false, "ZONE_QUARANTINED"
+        end
+        local resetting, resetting_code = self.zone_manager:BeginQuarantinedRecovery(
+            zone.zone_id,
+            instance.instance_id,
+            "destroy_retry_after_validation"
+        )
+        if not resetting then
+            return false, resetting_code
+        end
+        return self.zone_manager:Release(zone.zone_id, instance.instance_id)
     end
     return false, "ZONE_STATE_INVALID"
+end
+
+local function ReturnParticipantPlayersToLobby(self, instance, reason)
+    if self.lobby_service == nil
+        or type(self.lobby_service.Enter) ~= "function" then
+        return true
+    end
+
+    for index = 1, #(instance.participant_order or {}) do
+        local userid = instance.participant_order[index]
+        local participant = instance:GetParticipant(userid)
+        local player = participant ~= nil
+            and type(participant.GetPlayer) == "function"
+            and participant:GetPlayer()
+            or participant ~= nil and participant.player_ref
+            or nil
+
+        -- 断线玩家没有有效实体；其恢复证据已由 RestoreQueue 保留，
+        -- 不应为了回大厅再次伪造一个玩家实体。
+        if HasPlayerTransform(player) then
+            local session = type(self.lobby_service.GetSession) == "function"
+                and self.lobby_service:GetSession(userid)
+                or nil
+            local returned = nil
+            local return_code = nil
+            if session ~= nil and type(self.lobby_service.Return) == "function" then
+                returned, return_code = self.lobby_service:Return(
+                    player,
+                    nil,
+                    reason or "instance_destroy"
+                )
+            else
+                session, return_code = self.lobby_service:Enter(player)
+                returned = session ~= nil
+            end
+            if not returned then
+                return false,
+                    return_code or InstanceManager.ERROR_CODES.PARTICIPANT_LOBBY_RETURN_FAILED
+            end
+            player.agon_instance_spawn_tile = nil
+        end
+    end
+    return true
 end
 
 function InstanceManager.Destroy(self, instance_id, reason)
@@ -978,6 +1035,19 @@ function InstanceManager.Destroy(self, instance_id, reason)
             )
             return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
         end
+        local returned, return_code = ReturnParticipantPlayersToLobby(
+            self,
+            instance,
+            reason or "destroy"
+        )
+        if not returned then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "lobby_return_failed:" .. tostring(return_code)
+            )
+            return false, InstanceManager.ERROR_CODES.PARTICIPANT_LOBBY_RETURN_FAILED
+        end
         local reset, reset_code = self.scene_service:Reset(instance, reason or "destroy")
         if not reset then
             self.zone_manager:Quarantine(
@@ -1015,6 +1085,19 @@ function InstanceManager.Destroy(self, instance_id, reason)
                 "group_cleanup_failed:" .. tostring(groups_code)
             )
             return false, InstanceManager.ERROR_CODES.INSTANCE_DESTROY_FAILED
+        end
+        local returned, return_code = ReturnParticipantPlayersToLobby(
+            self,
+            instance,
+            reason or "destroy"
+        )
+        if not returned then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "lobby_return_failed:" .. tostring(return_code)
+            )
+            return false, InstanceManager.ERROR_CODES.PARTICIPANT_LOBBY_RETURN_FAILED
         end
         if instance.root_scope ~= nil and not instance.root_scope:IsClosed() then
             local scope_closed, scope_code = instance.root_scope:Close(reason or "destroy")
@@ -1206,7 +1289,8 @@ function InstanceManager.RecoverOnRestart(self)
                 failure_code = queue_code or InstanceManager.ERROR_CODES.RECOVERY_FAILED
             end
             if failure_code == nil then
-                if zone:IsQuarantined() then
+                if zone:IsQuarantined()
+                    and zone.reserved_instance_id ~= instance_id then
                     failure_code = "ZONE_QUARANTINED"
                 elseif self.scene_service == nil
                     or type(self.scene_service.RecoverSnapshot) ~= "function" then

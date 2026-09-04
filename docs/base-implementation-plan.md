@@ -1285,6 +1285,8 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 真实 Spectator 首轮发现客户端输入失败：A 已获服务端 `SPECTATING`/classified 状态，但 `playercontroller:Enable(false)` 使官方相机输入路径提前返回，当前 `agon_spectator_input_layer` 还没有客户端实现；必须先补安全的“保留旋转/缩放、继续屏蔽 gameplay input”接线并复测。
 - 同轮确认当前临时绑定脚本直接调用 `instance_manager:AttachPlayer()`，只完成 Participant/Sandbox 绑定，`InstanceManager:Start()` 也未移动真实 Participant 到 ScenePlan 出生点；因此 B 留在大厅是当前代码行为，但不是最终 Instance 场景验收通过，需单独补 Participant 出生/传送接线并验证大厅/Zone 边界。
 - 2026-09-04 已补齐上述两条接线：客户端 Spectator 通过 classified `agon_spectator_active` 绕过官方 `DoCameraControl()` 的 disabled 早退但不恢复 gameplay input；InstanceManager 在初始启动和运行中重连时按 `ScenePlan.participant_spawn_points` 移动真实 Participant，并由 Attach 清理大厅会话。重启后的真实双客户端验证仍未完成。
+- 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
+- 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit

@@ -1754,3 +1754,94 @@ docs(base): 修正执行日志文件名
 
 - 维护者执行旧实例清理命令；服务端返回 `WP10_OLD_CLEANUP:true:INSTANCE_DESTROYED`，确认旧代码创建的 `agon:1:2` 已通过正式销毁流程结束。
 - 本次清理未涉及其他 Instance；下一步重启 `Test/World01` 服务端，使 2.69 的客户端观战镜头和 Participant 出生点修复加载，再重新开始真实双客户端验收。
+
+### 2.71 2026-09-04：修复加载后的双玩家重连与技能树握手通过
+
+- `Test/World01` 重启后，B=`KU_aUxMQjy7` 恢复为 `wathgrithr`，随后 A=`KU_UR8pbyho` 恢复为 `wilson`；两位玩家均成功完成官方 `SKILLTREE_HANDSHAKE_COMPLETE`，且 `handshake_state=3`。
+- 本次提供的重启片段未包含新的 `CORE_READY` 行，但两位玩家已由新进程正常恢复并完成官方握手；下一步开启本进程的 live player test 开关，再创建新的双玩家 Instance 验证大厅离开和场景出生点。
+
+### 2.72 2026-09-04：开启真实玩家测试命令暂未收到服务端回显
+
+- 维护者反馈在 B=`KU_aUxMQjy7` 客户端执行 `/agon.test.player_sandbox on` 后没有看到日志或公告回显。
+- 本次不能据此判定开关已开启；在收到明确的 `PLAYER_TEST_ENABLED` 或 `PLAYER_TEST_STATUS enabled=true` 前，不创建新的真实测试 Instance。下一步先执行单独的 status 命令确认命令是否到达服务端。
+
+### 2.73 2026-09-04：真实玩家测试 status 命令仍无服务端回显
+
+- 维护者再次反馈在 B=`KU_aUxMQjy7` 客户端执行 `/agon.test.player_sandbox status` 后仍没有任何日志或公告。
+- 当前开关状态未知，不能继续真实 Instance 测试；需要先区分“命令未送达/输入位置不正确”和“服务端 Mod/命令注册异常”。本步转为只读核对本机 Klei 服务端日志，不修改存档或服务进程。
+
+### 2.74 2026-09-04：核对重启日志，确认 Mod 正常加载且测试命令未到达服务端
+
+- 只读检查 `D:\OneDrive\DST\klei\DoNotStarveTogether\Test\World01\server_log.txt`：本次重启包含 `LOADING LUA SUCCESS`、The Agon `STARTED`、`LAYOUT_READY`、`RECOVERY_COMPLETE` 和 `CORE_READY`；没有发现 `modmain`、`spectator_input`、Lua syntax 或启动失败错误。
+- 同一日志确认 B=`KU_aUxMQjy7` 为 `admin=1`，A=`KU_UR8pbyho` 与 B 均完成官方 `SKILLTREE_HANDSHAKE_COMPLETE` 且 `handshake_state=3`。既有 `wagpunk_arena_manager`/`hermitcrab_relocation_manager` set-piece 告警仍存在，和本次源代码修改无关。
+- 日志中没有两次 `/agon.test.player_sandbox on/status` 对应的 `running text command`、`PLAYER_TEST_*` 或 `RemoteCommandInput` 记录；因此当前证据指向客户端命令没有送达服务端，而非 Runtime 或新代码启动回归。下一步用一行 `c_announce` 直接调用 Runtime 验证 live test 开关。
+
+### 2.75 2026-09-04：新进程 Runtime 直调用开启真实玩家测试通过
+
+- 维护者通过游戏控制台执行 Runtime 直调用；服务端公告 `WP10_PLAYER_TEST_ON:true:PLAYER_TEST_ENABLED`。
+- 本项确认新进程的 The Agon Runtime 可用且 live player test 开关已开启；此前无回显的 `/agon.test.player_sandbox` 是命令入口未送达，不是本次源代码修改造成的服务端启动故障。下一步创建 A=`KU_UR8pbyho`、B=`KU_aUxMQjy7` 的新 TestMode Instance。
+
+### 2.76 2026-09-04：修复加载后的双玩家 TestMode 实例创建通过
+
+- 维护者创建包含 A=`KU_UR8pbyho`、B=`KU_aUxMQjy7` 的新 TestMode Instance；服务端公告 `WP10_INSTANCE_CREATE:agon:1:3:zone=small_01`。
+- 当前实例尚未绑定玩家；下一步先 Attach A，验证新 Instance 的 Participant/Sandbox 接线。
+
+### 2.77 2026-09-04：修复加载后的 A Participant Attach 通过
+
+- 维护者将 A=`KU_UR8pbyho` 绑定到 `agon:1:3`；服务端公告 `WP10_ATTACH_A:true:nil`。
+- Attach 调用已通过新代码路径；下一步核对 A 的 PlayerSandbox transaction 以及 Attach 成功后大厅会话是否已移除。由于 Instance 尚未 Start，不能在此时用物理位置判断最终出生点。
+
+### 2.78 2026-09-04：修复加载后的 A 沙箱与大厅登记核验通过
+
+- 维护者执行 A 诊断；服务端返回 `WP10_ATTACH_A_DIAG:participant=true:state=READY:tx=SANDBOXED:lobby=false`。
+- 本项确认 A 已处于 Participant `READY`、PlayerSandbox `SANDBOXED`，且大厅会话已移除；下一步绑定 B=`KU_aUxMQjy7`。
+
+### 2.79 2026-09-04：修复加载后的 B Participant Attach 通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:3`；服务端公告 `WP10_ATTACH_B:true:nil`。
+- A/B 均已完成真实 Participant/Sandbox Attach；下一步启动 `agon:1:3`，验证启动时按 ScenePlan 出生点移动真实玩家以及 Instance/Zone 状态。
+
+### 2.80 2026-09-04：真实双玩家 Instance 启动通过
+
+- 维护者启动 `agon:1:3`；服务端公告 `WP10_START:true:nil`。
+- A/B 的真实玩家实例已完成启动流程；下一步核验 Instance/Zone 状态、玩家出生点以及大厅会话是否已清理。
+
+### 2.81 2026-09-04：真实玩家出生点与大厅清理核验通过
+
+- `WP10_START_DIAG` 返回 `instance=RUNNING`、`zone=small_01`。
+- A=`KU_UR8pbyho`：`lobby=false`，实际 Tile=`42,265`，预期 Tile=`42,265`。
+- B=`KU_aUxMQjy7`：`lobby=false`，实际 Tile=`48,265`，预期 Tile=`48,265`。
+- 两名 Participant 均为 `READY`；玩家出生点移动与 Attach 后大厅会话清理已通过。下一步验证观战输入的真实客户端旋转/缩放行为。
+
+### 2.82 2026-09-04：新出生点接线暴露销毁前大厅返回缺口
+
+- 维护者执行 `DestroyInstance("agon:1:3", "wp10_spectator_setup")`；服务端公告 `WP10_SPECTATOR_PREP_CLEANUP:false:SCENE_RESET_FAILED`。
+- 实际日志只出现两次 `No registered spawn points`，未出现 Lua 启动或 Mod 加载错误；结合 `SceneService:Reset()` 的顺序确认，失败原因是 A/B 已被正确移动到 Zone 内，但销毁流程在清空 Zone 前没有把真实玩家返回 Lobby，`ValidateZoneCleared()` 因玩家仍占据 Zone 而失败。
+- 该失败是新出生点接线后暴露的生命周期缺口，不是出生点坐标错误；按设计契约补充 `Restore → Return to Lobby → Scene Reset`，并在下一次重启后复测。
+
+### 2.83 2026-09-04：补充销毁前玩家回大厅接线
+
+- `InstanceManager.Destroy()` 在场景 Reset 前调用新的 `ReturnParticipantPlayersToLobby()`；在线真实玩家通过 `LobbyService:Enter/Return` 回到安全大厅点，断线玩家继续由恢复队列保留证据，合成诊断玩家不伪造实体。
+- 同步新增 `PARTICIPANT_LOBBY_RETURN_FAILED` 错误码；修改后的 `git diff --check` 通过。
+- 当前服务器进程仍是补丁加载前的旧运行时，先手动把 A/B 移出 `agon:1:3` 完成故障实例收尾，再重启加载补丁进行自动销毁回归。
+
+### 2.84 2026-09-04：故障实例的手动回大厅恢复通过
+
+- 维护者执行运行时 Lobby 恢复；服务端公告 `WP10_RECOVER_LOBBY:A=true:nil:B=true:nil`。
+- A/B 已离开 `agon:1:3` 的 Zone，下一步重试原实例销毁，验证场景 Reset 与 Zone 释放。
+
+### 2.85 2026-09-04：销毁重试被遗留 QUARANTINED Zone 拦截
+
+- 维护者再次执行 `DestroyInstance("agon:1:3", "wp10_failed_cleanup_retry")`；服务端公告 `WP10_FAILED_CLEANUP_RETRY:false:INSTANCE_DESTROY_FAILED`。
+- 根因不是玩家仍在 Zone：第一次 Reset 失败后已将 `small_01` 置为 `QUARANTINED`，原 `CleanupZone()` 无条件拒绝该状态，且 `Zone.TRANSITIONS.QUARANTINED` 与 `ReleaseRecovered()` 也不支持经过验证后的恢复，因此重试无法释放 Zone。
+
+### 2.86 2026-09-04：补充隔离 Zone 的受控销毁重试与重启恢复
+
+- `Zone`/`ZoneManager` 新增 owner 校验的 `BeginQuarantinedRecovery()`；只有 `SceneService:Reset()` 或 `RecoverSnapshot()` 已完成空 Zone 验证后，才能执行 `QUARANTINED → RESETTING → FREE`。
+- `InstanceManager.Destroy()` 允许同一处于 `DESTROYING` 生命周期的 Instance 在验证成功后重试；`RecoverOnRestart()`/`ReleaseRecovered()` 允许匹配 owner 的隔离 Zone 走同一受控路径，其他隔离 Zone 仍拒绝自动释放。
+- 当前服务器仍未加载本轮补丁；下一步先保存当前故障状态并重启，使恢复流程清理 `agon:1:3`，然后再继续观战测试。
+
+### 2.87 2026-09-04：隔离恢复补丁静态检查通过
+
+- 修改涉及 `base-design.md`、`base-implementation-plan.md`、`instance_manager.lua`、`zone.lua`、`zone_manager.lua` 与本执行日志；`git diff --check` 通过，仅有 Git 的 LF/CRLF 提示。
+- 未安装或执行全局 Lua 工具；当前仍需通过真实服务器重启恢复日志验证运行时行为。

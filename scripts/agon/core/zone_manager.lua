@@ -52,6 +52,7 @@ local function AttachMethods(manager)
     manager.BeginBuilding = ZoneManager.BeginBuilding
     manager.Activate = ZoneManager.Activate
     manager.BeginResetting = ZoneManager.BeginResetting
+    manager.BeginQuarantinedRecovery = ZoneManager.BeginQuarantinedRecovery
     manager.Release = ZoneManager.Release
     manager.Quarantine = ZoneManager.Quarantine
     manager.QuarantineRecovered = ZoneManager.QuarantineRecovered
@@ -184,6 +185,16 @@ function ZoneManager.BeginResetting(self, zone_id, instance_id, reason)
     return RunZoneOperation(self, zone_id, instance_id, "BeginResetting", reason)
 end
 
+function ZoneManager.BeginQuarantinedRecovery(self, zone_id, instance_id, reason)
+    return RunZoneOperation(
+        self,
+        zone_id,
+        instance_id,
+        "BeginQuarantinedRecovery",
+        reason
+    )
+end
+
 function ZoneManager.Release(self, zone_id, instance_id)
     return RunZoneOperation(self, zone_id, instance_id, "Release")
 end
@@ -222,13 +233,19 @@ function ZoneManager.ReleaseRecovered(self, zone_id, instance_id)
     if zone.state == Zone.STATES.FREE then
         return true, "ALREADY_FREE"
     end
-    if zone.state == Zone.STATES.QUARANTINED then
-        return false, Zone.ERROR_CODES.ZONE_QUARANTINED
-    end
     if zone.reserved_instance_id ~= instance_id then
         return false, Zone.ERROR_CODES.ZONE_OWNER_MISMATCH
     end
-    if zone.state == Zone.STATES.RESERVED then
+    if zone.state == Zone.STATES.QUARANTINED then
+        local resetting, resetting_code = zone:BeginQuarantinedRecovery(
+            instance_id,
+            "restart_recovery_cleaned"
+        )
+        if not resetting then
+            return false, resetting_code
+        end
+        return zone:Release(instance_id)
+    elseif zone.state == Zone.STATES.RESERVED then
         return zone:ReleaseReservation(instance_id)
     elseif zone.state == Zone.STATES.BUILDING or zone.state == Zone.STATES.ACTIVE then
         local resetting, resetting_code = zone:BeginResetting(
