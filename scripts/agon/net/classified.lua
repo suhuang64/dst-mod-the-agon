@@ -13,6 +13,7 @@ Classified.NETWORK_FIELDS =
     GENERATION = "generation",
     STATE_PAYLOAD = "state_payload",
     SPECTATOR_STATE = "spectator_state",
+    SPECTATOR_ACTIVE = "spectator_active",
 }
 
 local function Encode(value)
@@ -72,6 +73,11 @@ function Classified.Configure(inst)
         "agon_player_classified.spectator_state",
         "agon_spectator_dirty"
     )
+    inst.agon_spectator_active = net_bool(
+        inst.GUID,
+        "agon_player_classified.spectator_active",
+        "agon_spectator_dirty"
+    )
     return true
 end
 
@@ -102,6 +108,9 @@ function Classified.ClearParticipant(inst)
     inst.agon_mode_id:set("")
     inst.agon_participant_state:set("")
     inst.agon_generation:set(0)
+    if inst.agon_spectator_active ~= nil then
+        inst.agon_spectator_active:set(false)
+    end
     if inst.agon_state_payload ~= nil then
         inst.agon_state_payload:set("")
     end
@@ -132,6 +141,11 @@ function Classified.SetSpectatorState(inst, state)
         return false
     end
     inst.agon_spectator_state:set(encoded)
+    if inst.agon_spectator_active ~= nil then
+        inst.agon_spectator_active:set(
+            type(state) == "table" and state.state == "SPECTATING"
+        )
+    end
     return true
 end
 
@@ -148,6 +162,7 @@ function Classified.GetClientState(inst)
         generation = ReadNetValue(inst.agon_generation, 0),
         state_payload = ReadNetValue(inst.agon_state_payload, ""),
         spectator_state = ReadNetValue(inst.agon_spectator_state, ""),
+        spectator_active = ReadNetValue(inst.agon_spectator_active, false),
     }
 end
 

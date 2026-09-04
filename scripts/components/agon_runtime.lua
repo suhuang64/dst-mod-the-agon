@@ -591,6 +591,7 @@ function AgonRuntime:InitializeCore()
         mode_registry = mode_registry,
         scene_service = scene_service,
         world = self.inst,
+        lobby_service = lobby_service,
         common_service_registry = common_service_registry,
         profile_registry = entity_profile_registry,
         restore_enqueue_fn = function(transaction, participant)

@@ -1692,3 +1692,65 @@ docs(base): 修正执行日志文件名
 - B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox status`；服务端返回 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
 - 本轮验收正式完成：新 A=`KU_UR8pbyho` 在活动 Instance 中单独断线后，于官方 SkillTree `handshake_state=3` 完成时自动输出 `PLAYER_RECONNECTED`，回到 `READY/SANDBOXED` 并复用原 transaction；B=`KU_aUxMQjy7` 始终保持正常。
 - 最终清理已确认 `ValidateCore=true`、Instance 数量为 0、10 个 Zone 全部 `FREE`、恢复队列和 Backend 队列均为 0、错误数为 0；测试开关已关闭。
+
+### 2.60 2026-09-04：WP10 下一验收范围确定
+
+- 本轮真实双玩家断线重绑定已完成并收尾；`PLAYER_RECONNECTED`、重连后 `READY/SANDBOXED`、原 transaction 复用和最终资源清理均已有服务端/真实客户端证据。
+- 根据 WP10 验收矩阵，下一步不重复断线测试，改做真实客户端 Spectator、GHOST、REVIVABLE_CORPSE 及 classified/StateGraph/网络可见性/相机边界观察；随后再进行 PREPARING、RUNNING、TRANSITION、FINISHING 四阶段人工重启矩阵。
+- WP10 仍为 `WAITING_MAINTAINER`，尚不能判定 `Base Ready`；第二 shard/cross-shard、真实 Backend transport、正式 UI/匹配和完整 live Profile mutation 继续保持未验证或不属于当前 Base 实施范围。
+
+### 2.61 2026-09-04：真实 Spectator/Death 验收开关重新开启
+
+- B=`KU_aUxMQjy7` 执行 `/agon.test.player_sandbox on` 成功；服务端输出 `PLAYER_TEST_ENABLED`。
+- 为验证 A 作为观察者、B 作为 Participant 的真实 Spectator 路径，下一步只为 B 创建一个新的 `TEST_MODE` Instance；避免 A 先成为 Participant 后被 SpectatorService 按设计拒绝。
+
+### 2.62 2026-09-04：真实 Spectator 测试目标 Instance 创建通过
+
+- 维护者创建仅包含 B=`KU_aUxMQjy7` 的 `TEST_MODE` Instance；服务端公告 `WP10_SPECTATOR_CREATE:agon:1:2:zone=small_01`。
+- A=`KU_UR8pbyho` 保持在大厅，作为后续 Spectator 观察者；下一步绑定 B 到 `agon:1:2`。
+
+### 2.63 2026-09-04：真实 Spectator 测试 B 绑定通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:2`，服务端公告 `WP10_SPECTATOR_ATTACH_B:true:nil`。
+- A=`KU_UR8pbyho` 未加入该 Instance，仍可作为大厅观察者；下一步确认 B 的 `SANDBOXED` 基线后启动 Instance。
+
+### 2.64 2026-09-04：真实 Spectator 测试 B 沙箱基线通过
+
+- 维护者读取 `agon:1:2` 的 B transaction；服务端返回 `WP10_SPECTATOR_BASE:participant=READY:player_ref=true:tx=SANDBOXED:clean=true:prefab=wathgrithr:error=nil`。
+- 本项 PASS：B 已作为唯一 Participant 进入干净活动前状态，A 仍在大厅；下一步启动 `agon:1:2`，再让 A 进入 Spectator。
+
+### 2.65 2026-09-04：真实 Spectator 测试目标 Instance 启动通过
+
+- 维护者启动 `agon:1:2`，服务端公告 `WP10_SPECTATOR_START:true:nil`。
+- B=`KU_aUxMQjy7` 作为目标 Instance 的唯一 Participant 继续运行；A=`KU_UR8pbyho` 留在大厅，下一步进入该 Instance 的 Spectator 并观察 B。
+
+### 2.66 2026-09-04：真实 Spectator 进入调用通过
+
+- 维护者让 A=`KU_UR8pbyho` 进入 `agon:1:2` 的 Spectator 并以 B=`KU_aUxMQjy7` 为目标；服务端公告 `WP10_SPECTATOR_ENTER:state=SPECTATING:instance=agon:1:2:target=KU_aUxMQjy7:echo=agon:echo:1:anchor=1`。
+- 本项初步 PASS：Spectator session、目标 Instance、Echo 和 Anchor 均已创建；下一步只读核对 A 不属于 Participant/PlayerSandbox，并由维护者观察真实客户端画面、相机、StateGraph 与 gameplay 交互。
+
+### 2.67 2026-09-04：真实 Spectator 服务端状态核验通过
+
+- 维护者执行只读 Runtime 诊断；服务端返回 `WP10_SPECTATOR_STATE:state=SPECTATING:instance=agon:1:2:target=KU_aUxMQjy7:echo=agon:echo:1:anchor=1:camera=FOLLOW:participant=false:sandbox_tx=false:player_is_spectator=true:spectating_instance_id=agon:1:2:classified=true`。
+- 本项服务端 PASS：A=`KU_UR8pbyho` 已建立观战关系和 classified 状态，未进入 Participant 或 PlayerSandbox；下一步仍需维护者返回真实客户端的相机、UI、StateGraph、可见性和玩法交互观察，不能仅凭该公告判定 Spectator 全项通过。
+
+### 2.68 2026-09-04：真实 Spectator 客户端输入失败及 B 位置行为核对
+
+- 维护者反馈 A=`KU_UR8pbyho` 在 Spectator 状态下无法移动，也无法旋转或缩放相机。服务端 `WP10_SPECTATOR_STATE` 已显示 `state=SPECTATING`、`participant=false`、`sandbox_tx=false`、`camera=FOLLOW`，因此本项真实客户端 Spectator/Camera 验收判定为 FAIL，不能继续宣称观战链路完成。
+- 源码与官方 API 核对确认：`SpectatorService.ApplyPlayerGuard()` 在服务端调用官方 `playercontroller:Enable(false)`，会关闭 PlayerController 的全部输入；`agon_spectator_input_layer` 目前只是服务端普通 Lua 表，没有客户端输入处理。官方 `playercontroller.lua` 的 `DoCameraControl()` 在 controller disabled 时也提前返回，因此 A 无法旋转/缩放相机是实际接线缺口。
+- 同一测试中 B=`KU_aUxMQjy7` 留在大厅：这是当前临时 WP10 绑定脚本的已知行为，不是 B 已进入目标场景的证据。脚本直接调用 `instance_manager:AttachPlayer()`，该调用只完成 Participant/Sandbox 绑定；当前 `InstanceManager:Start()` 也没有按 ScenePlan Participant spawn point 移动真实玩家。因此“当前代码会留在大厅”与“最终产品应该进入目标 Instance 场景”必须区分记录。
+- 本轮只完成诊断和文档记录，尚未修改源代码，也未清理正在运行的 `agon:1:2`；下一步分别补齐安全的客户端观战相机输入层和 Participant 场景出生/传送接线，再重新执行真实客户端验收。
+
+### 2.69 2026-09-04：修复观战镜头输入与 Participant 场景出生接线
+
+- 针对 2.68 的两个缺口完成最小源代码修复：新增 `scripts/agon/player/spectator_input.lua`，通过 `AddClassPostConstruct("components/playercontroller", ...)` 仅在本地客户端 Spectator 状态下替换 `DoCameraControl()`；服务端仍保持 `playercontroller:Enable(false)`，因此移动、动作和交互继续被封锁，官方旋转/缩放输入重新可用。
+- `scripts/agon/net/classified.lua` 新增 `agon_spectator_active` 网络布尔字段；SpectatorService 刷新 classified 时，客户端可以可靠判断本地玩家是否处于观战态，退出观战或清理 classified 时会恢复为 `false`。
+- `scripts/agon/core/instance_manager.lua` 新增 Participant 出生点定位：启动初始场景后按 `participant_order` 使用当前 `ScenePlan.participant_spawn_points` 和官方 TerrainService 移动真实玩家；已运行 Instance 的重连 Attach 也会重新定位。合成诊断玩家没有 Transform 时跳过物理移动，以保持 WP4–WP9 合成诊断兼容。
+- `scripts/components/agon_runtime.lua` 将 `lobby_service` 注入 InstanceManager；Attach 成功后清理玩家大厅会话，因此正式流程中 B 不再保留大厅登记。实际位置移动发生在 Start 或运行中重连 Attach 完成时。
+- 静态验证：`git diff --check` 通过；未安装全局 Lua 解析器，也未修改只读官方 `D:\OneDrive\DST\scripts`。尚未进行服务器重启后的真实双客户端重测，因此本项不能据此宣布客户端镜头和 B 场景位置已最终 PASS。
+- 当前运行中的 `agon:1:2` 属于旧代码创建的测试实例；源代码变更需要重启/重新加载 Mod 后再清理旧实例并重新测试。下一步先完成安全收尾，再按一行控制台命令重做“创建→Attach→Start→位置/镜头→Spectator→清理”验收。
+
+### 2.70 2026-09-04：旧 Spectator 测试实例清理完成
+
+- 维护者执行旧实例清理命令；服务端返回 `WP10_OLD_CLEANUP:true:INSTANCE_DESTROYED`，确认旧代码创建的 `agon:1:2` 已通过正式销毁流程结束。
+- 本次清理未涉及其他 Instance；下一步重启 `Test/World01` 服务端，使 2.69 的客户端观战镜头和 Participant 出生点修复加载，再重新开始真实双客户端验收。

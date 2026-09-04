@@ -14,6 +14,15 @@ PrefabFiles =
 local AgonRpc = require("agon/net/rpc")
 AgonRpc.Register()
 
+-- WP10：PlayerController 在官方 Enable(false) 状态下会跳过镜头控制；
+-- 观战只替换客户端 DoCameraControl，保留服务端对移动和交互的封锁。
+local SpectatorInput = require("agon/player/spectator_input")
+if type(AddClassPostConstruct) == "function"
+    and SpectatorInput ~= nil
+    and type(SpectatorInput.Install) == "function" then
+    AddClassPostConstruct("components/playercontroller", SpectatorInput.Install)
+end
+
 local function StartAgonServerRuntime(world)
     -- world.ismastersim 表示当前 shard 持有权威模拟；这里不是 Master shard
     -- 判断，避免把服务端权威与 shard 拓扑角色混为一谈。

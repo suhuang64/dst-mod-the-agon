@@ -1277,6 +1277,16 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 两角色真实沙箱回归已完成：A=`wilson`、B=`wathgrithr` 均进入 `SANDBOXED`，官方角色快照存在，A/B 的 `RemoveParticipant` 即时恢复均返回成功，Instance 清理后 `ValidateCore=true`、`instances=0`、`zones=10/free=10`、`restores=0`、`backend_pending=0`、`errors=0`。A 的延迟恢复校验失败已证实为回到大厅后的饥饿/理智/温度自然漂移，不是恢复丢失；最终 Debug 显示 live test 开关仍开启，必须先关闭再结束本轮。
 - 2026-09-04 安全收尾完成：管理员关闭 live player test 后得到 `PLAYER_TEST_DISABLED` 和 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。两角色 Character Adapter 的真实沙箱回归可记为限定范围 PASS，但 WP10 仍不能判定 Base Ready；真实 UI/StateGraph/网络可见性、完整 live Profile mutation、断线重绑定、四阶段重启矩阵和跨 shard 仍待验收。
 
+### WP10 进度核对（2026-09-04）
+
+- 真实双玩家断线重绑定已补测并通过：A=`KU_UR8pbyho` 单独断线后，在官方 SkillTree `handshake_state=3` 完成时自动输出 `PLAYER_RECONNECTED`，A 回到 `READY/SANDBOXED` 并复用原 transaction；B=`KU_aUxMQjy7` 和活动 Instance 保持正常；最终 Instance、Zone、恢复队列、Backend 队列均已清理。
+- 因此，WP10 当前不再把“真实玩家断线重绑定”列为未完成项；WP10 仍保持 `WAITING_MAINTAINER`，不能宣称 `Base Ready`。
+- 下一优先级为真实客户端 Spectator、GHOST、REVIVABLE_CORPSE，以及 `agon_player_classified` 的 audience/instance/generation/spectator/death 状态、StateGraph、网络可见性和相机边界观察；完成后再执行四阶段人工重启矩阵。
+- 2026-09-04 真实 Spectator 首轮发现客户端输入失败：A 已获服务端 `SPECTATING`/classified 状态，但 `playercontroller:Enable(false)` 使官方相机输入路径提前返回，当前 `agon_spectator_input_layer` 还没有客户端实现；必须先补安全的“保留旋转/缩放、继续屏蔽 gameplay input”接线并复测。
+- 同轮确认当前临时绑定脚本直接调用 `instance_manager:AttachPlayer()`，只完成 Participant/Sandbox 绑定，`InstanceManager:Start()` 也未移动真实 Participant 到 ScenePlan 出生点；因此 B 留在大厅是当前代码行为，但不是最终 Instance 场景验收通过，需单独补 Participant 出生/传送接线并验证大厅/Zone 边界。
+- 2026-09-04 已补齐上述两条接线：客户端 Spectator 通过 classified `agon_spectator_active` 绕过官方 `DoCameraControl()` 的 disabled 早退但不恢复 gameplay input；InstanceManager 在初始启动和运行中重连时按 `ScenePlan.participant_spawn_points` 移动真实 Participant，并由 Attach 清理大厅会话。重启后的真实双客户端验证仍未完成。
+- 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
+
 ### 建议 Commit
 
 ```text

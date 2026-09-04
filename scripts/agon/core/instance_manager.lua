@@ -30,6 +30,8 @@ InstanceManager.ERROR_CODES =
     INSTANCE_INVARIANT_FAILED = "INSTANCE_INVARIANT_FAILED",
     SCENE_APPLY_FAILED = "SCENE_APPLY_FAILED",
     SCENE_RESET_FAILED = "SCENE_RESET_FAILED",
+    PARTICIPANT_SPAWN_POINT_UNAVAILABLE = "PARTICIPANT_SPAWN_POINT_UNAVAILABLE",
+    PARTICIPANT_SPAWN_FAILED = "PARTICIPANT_SPAWN_FAILED",
     RECOVERY_FAILED = "RECOVERY_FAILED",
 }
 
@@ -61,6 +63,8 @@ local function AttachMethods(manager)
     manager.GetParticipantInstanceId = InstanceManager.GetParticipantInstanceId
     manager.AddParticipant = InstanceManager.AddParticipant
     manager.AttachPlayer = InstanceManager.AttachPlayer
+    manager.PositionParticipant = InstanceManager.PositionParticipant
+    manager.PositionParticipants = InstanceManager.PositionParticipants
     manager.MarkDisconnected = InstanceManager.MarkDisconnected
     manager.RemoveParticipant = InstanceManager.RemoveParticipant
     manager.RecoverOnRestart = InstanceManager.RecoverOnRestart
@@ -143,6 +147,7 @@ function InstanceManager.New(options)
         mode_registry = options.mode_registry,
         scene_service = options.scene_service,
         world = options.world,
+        lobby_service = options.lobby_service,
         now_fn = options.now_fn,
         common_service_registry = options.common_service_registry
             or CommonServiceRegistry.New(),
@@ -165,6 +170,86 @@ function InstanceManager.New(options)
         end,
     })
     return AttachMethods(manager)
+end
+
+local function HasPlayerTransform(player)
+    return type(player) == "table"
+        and player.Transform ~= nil
+        and type(player.Transform.SetPosition) == "function"
+end
+
+local function GetParticipantSpawnIndex(instance, userid)
+    if instance == nil or not IsNonEmptyString(userid)
+        or type(instance.participant_order) ~= "table" then
+        return nil
+    end
+    for index = 1, #instance.participant_order do
+        if instance.participant_order[index] == userid then
+            return index
+        end
+    end
+    return nil
+end
+
+function InstanceManager.PositionParticipant(self, instance_id, userid)
+    local instance = self:Get(instance_id)
+    local participant = self:GetParticipant(userid)
+    if instance == nil or participant == nil
+        or participant.instance_id ~= instance_id then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
+    end
+
+    local player = type(participant.GetPlayer) == "function"
+        and participant:GetPlayer()
+        or participant.player_ref
+    -- 合成诊断玩家没有 Transform；它们只验证状态管线，不参与真实出生点移动。
+    if not HasPlayerTransform(player) then
+        return true, "POSITION_SKIPPED"
+    end
+
+    local plan = instance.scene_plan
+    local points = plan ~= nil and plan.participant_spawn_points or nil
+    local spawn_index = GetParticipantSpawnIndex(instance, userid)
+    local point = spawn_index ~= nil and type(points) == "table"
+        and points[spawn_index]
+        or nil
+    if type(point) ~= "table"
+        or type(point.x) ~= "number"
+        or type(point.z) ~= "number" then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_SPAWN_POINT_UNAVAILABLE
+    end
+
+    local terrain = self.scene_service ~= nil and self.scene_service.terrain or nil
+    if terrain == nil or type(terrain.MoveEntityToTile) ~= "function" then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_SPAWN_FAILED
+    end
+    local moved, move_code = terrain:MoveEntityToTile(player, point.x, point.z)
+    if not moved then
+        return false, move_code or InstanceManager.ERROR_CODES.PARTICIPANT_SPAWN_FAILED
+    end
+    player.agon_instance_spawn_tile =
+    {
+        x = point.x,
+        z = point.z,
+    }
+    return true
+end
+
+function InstanceManager.PositionParticipants(self, instance)
+    if instance == nil then
+        return false, InstanceManager.ERROR_CODES.INSTANCE_NOT_FOUND
+    end
+    for index = 1, #(instance.participant_order or {}) do
+        local userid = instance.participant_order[index]
+        local positioned, position_code = self:PositionParticipant(
+            instance.instance_id,
+            userid
+        )
+        if not positioned then
+            return false, position_code
+        end
+    end
+    return true
 end
 
 function InstanceManager.Get(self, instance_id)
@@ -325,6 +410,33 @@ function InstanceManager.AttachPlayer(self, instance_id, userid, player)
             )
             return false, death_code or "DEATH_POLICY_ATTACH_FAILED"
         end
+    end
+
+    if instance.lifecycle_state == Instance.STATES.RUNNING then
+        local positioned, position_code = self:PositionParticipant(
+            instance_id,
+            userid
+        )
+        if not positioned then
+            if sandbox ~= nil then
+                sandbox:RestoreOriginal(
+                    participant,
+                    player,
+                    "participant_spawn_failed"
+                )
+            end
+            participant:MarkDisconnected(
+                "participant_spawn_failed",
+                instance.generation,
+                GetNow(self)
+            )
+            return false, position_code
+        end
+    end
+
+    if self.lobby_service ~= nil
+        and type(self.lobby_service.OnPlayerRemoved) == "function" then
+        self.lobby_service:OnPlayerRemoved(player)
     end
     return true
 end
@@ -637,6 +749,28 @@ function InstanceManager.Start(self, instance_id, reason)
             end
             return false, scene_code or InstanceManager.ERROR_CODES.SCENE_APPLY_FAILED
         end
+    end
+
+    local positioned, position_code = self:PositionParticipants(instance)
+    if not positioned then
+        instance:Fail("participant_spawn_failed")
+        if self.scene_service ~= nil and not self.scene_service:Reset(
+            instance,
+            "participant_spawn_failed"
+        ) then
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "participant_spawn_reset_failed:" .. tostring(position_code)
+            )
+        else
+            self.zone_manager:Quarantine(
+                instance.zone_id,
+                instance.instance_id,
+                "participant_spawn_failed:" .. tostring(position_code)
+            )
+        end
+        return false, position_code
     end
 
     local started, start_code = instance:Start(reason or "start")
