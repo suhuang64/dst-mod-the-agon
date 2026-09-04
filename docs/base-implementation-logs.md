@@ -1198,3 +1198,120 @@ docs(base): 修正执行日志文件名
 - 随后执行 `/agon.test.player_sandbox status`，服务端记录 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
 - 本项 PASS：live player test 开关已关闭，当前进程恢复默认安全状态；结合 1.68，`wilson`/`wathgrithr` 真实绑定、Capture、进入沙箱、即时退出恢复、Instance/Zone 清理和核心 Debug 均已完成，当前无本轮残留。
 - 本轮两角色 Character Adapter 验证到此结束。仍未覆盖真实客户端 UI/StateGraph/网络可见性、统一临时物品/技能/能力/移动速度的 live mutation、断线重绑定、四阶段重启矩阵及跨 shard；这些不能由本轮结果代替。
+
+### 1.70 2026-09-04：开始真实两角色跨重启恢复验收
+
+- 本轮从 1.69 的干净状态开始：`live_player_test` 已关闭、Instance/Zone/恢复队列无残留；测试对象仍为官方 `Test/World01` 的 A=`KU_0vPtVpg3`（`wilson`）和 B=`KU_aUxMQjy7`（`wathgrithr`）。
+- 静态核对当前恢复链路：活动 Instance 的 `OnSave` 保存 Instance 与未完成 PlayerSandbox transaction；重启按 `ABORT_ON_RESTART` 中止活动 Instance，`RecoverOnRestart` 将未提交 transaction 转入恢复队列并清理/释放 Zone；玩家重新加入时先执行 `TryRestore`，随后进入大厅，SkillTree 握手完成后仍可按 transaction 受控重试。
+- 本条只记录测试启动与验证前提，尚未创建新的 Instance、保存或重启；后续每一步的服务端结果继续追加在本日志。
+
+### 1.71 2026-09-04：跨重启测试重新开启 live player test
+
+- 管理员 `KU_aUxMQjy7` 执行 `/agon.test.player_sandbox on`。
+- 服务端记录 `PLAYER_TEST_ENABLED ... shard_id=1 ... operation=live_player_test_on`，说明本轮真实 `TEST_MODE` Instance 创建所需的进程内开关已开启。
+- 尚未创建 Instance、绑定玩家或执行保存/重启；下一步先查询 `status`。
+
+### 1.72 2026-09-04：跨重启测试开关状态核对通过
+
+- 管理员 `KU_aUxMQjy7` 执行 `/agon.test.player_sandbox status`。
+- 服务端返回 `PLAYER_TEST_STATUS ... enabled=true eligible=true code=nil`。
+- 本项 PASS：当前进程具备创建真实 `TEST_MODE` Instance 的资格；尚未创建 Instance，下一步仅创建 A/B Instance。
+
+### 1.73 2026-09-04：跨重启测试 Instance 创建通过
+
+- 管理员创建 `TEST_MODE` Instance，服务端返回 `WP10_INSTANCE_CREATE:agon:1:3:zone=small_01`。
+- 本项 PASS：`agon:1:3` 已成功创建并占用 `small_01`；当前尚未绑定任何玩家，下一步仅绑定 A=`KU_0vPtVpg3`。
+
+### 1.74 2026-09-04：跨重启测试 A 绑定调用通过
+
+- 维护者将 A=`KU_0vPtVpg3`（`wilson`）绑定到 `agon:1:3`，服务端返回 `WP10_ATTACH_A:true:nil`。
+- 本项为绑定调用初步 PASS；仍需读取 A 的 PlayerSandbox transaction，确认 `SANDBOXED`、`clean_entered=true` 和角色快照完整后，才能继续绑定 B。
+
+### 1.76 2026-09-04：A 事务状态通过，首次角色快照探针路径写错
+
+- 维护者读取 A=`KU_0vPtVpg3` 的事务，返回 `WP10_SANDBOX_A:state=SANDBOXED:clean=true:prefab=wilson:beard=false:error=nil`。
+- `state`、`clean` 和 `error` 均符合预期；复核代码后确认角色适配器注册 ID 是 `character:default`，Wilson 的胡须数据位于 `snapshot.adapters["character:default"].resources.beard`，而不是 `snapshot.adapters.beard`。
+- 因此 `beard=false` 仅表示本次诊断表达式取错层级，不表示快照缺失；下一步使用正确路径只读复核，未修改玩家或事务。
+
+### 1.77 2026-09-04：A 真实沙箱事务与 Wilson 角色快照复核通过
+
+- 使用正确快照路径复核后，服务端返回 `WP10_SANDBOX_A_FIX:state=SANDBOXED:clean=true:prefab=wilson:beard=true:error=nil`。
+- 本项 PASS：A 的真实 PlayerSandbox 已完成 Capture/清理/进入沙箱，`character:default` 下的 Wilson `beard` 快照存在且无错误；下一步绑定 B=`KU_aUxMQjy7`。
+
+### 1.78 2026-09-04：跨重启测试 B 绑定调用通过
+
+- 维护者将 B=`KU_aUxMQjy7`（`wathgrithr`）绑定到 `agon:1:3`，服务端返回 `WP10_ATTACH_B:true:nil`。
+- 本项为绑定调用初步 PASS；仍需读取 B 的 PlayerSandbox transaction，确认 `SANDBOXED`、`clean_entered=true`、`character_prefab=wathgrithr` 及角色资源快照无错误。
+
+### 1.79 2026-09-04：两名真实玩家均进入沙箱，准备保存跨重启样本
+
+- 服务端返回 `WP10_SANDBOX_B:state=SANDBOXED:clean=true:prefab=wathgrithr:inspiration=true:battleborn=true:error=nil`。
+- 结合 1.76/1.77，A=`wilson` 与 B=`wathgrithr` 均已完成真实 Capture、清理和进入沙箱，角色快照存在且 transaction 无错误。
+- 当前 `agon:1:3` 仍为活动 Instance，尚未执行保存或重启；下一步显式执行 `c_save()` 固化活动 Instance 和两个未完成恢复事务。
+
+### 1.80 2026-09-04：跨重启样本保存成功
+
+- 维护者执行 `c_save()`；服务端在 `00:37:42` 记录 A=`KU_0vPtVpg3`、B=`KU_aUxMQjy7` 两条用户序列化，以及当前 World01 序列化。
+- 本项 PASS：活动 `agon:1:3` 和两个仍处于未完成状态的 PlayerSandbox transaction 已写入同一 `Test/World01` 存档；尚未执行关服或重启。
+- 下一步执行正常 `c_shutdown()`，随后使用同一存档启动以验证 `ABORT_ON_RESTART`、恢复队列和真实玩家重连恢复。
+
+### 1.81 2026-09-04：真实活动 Instance 跨重启中止与恢复队列生成通过
+
+- 使用保存后的同一 `Test/World01` 存档重启；服务端记录 `STARTED`、`LAYOUT_READY` 和 `CORE_READY`。
+- `RECOVERY_COMPLETE` 返回 `aborted_instance_count=1 pending_restore_count=2 quarantined_zone_count=0`；`CORE_READY` 同时返回 `instance_count=0 zone_count=10 free_zone_count=10 aborted_instance_count=1`。
+- 本项 PASS：活动 `agon:1:3` 未续跑，Zone 已清回可用状态，两个真实玩家事务已进入恢复队列且未发生 Zone 隔离；下一步读取队列明细，再验证两个客户端重连恢复。
+
+### 1.82 2026-09-04：跨重启恢复队列明细通过
+
+- 服务端 `DebugRecovery` 返回 `restore_queue entries=2 pending=2 blocked=0`，Runtime Debug 为 `boot=4 ... instances=0 zones=10 restores=2 backend_pending=0 errors=0 live_player_test=off`。
+- Backend adapter 当前 `records=0 pending=0 submitted=0 transport=not_configured`，没有新增后端记录。
+- 本项 PASS：两个真实玩家的恢复事务均保留为可恢复 pending，未被错误标记为 blocked；下一步让 A=`KU_0vPtVpg3` 先重新连接同一 `Test/World01`。
+
+### 1.75 2026-09-04：跨重启测试 A 绑定结果待事务核验
+
+- `WP10_ATTACH_A:true:nil` 已返回；A 已通过绑定调用，但本条不把该返回值扩大解释为完整沙箱 PASS。
+- 下一步读取 `agon:1:3` 中 A 的 PlayerSandbox transaction，确认 `state=SANDBOXED`、`clean_entered=true`、`character_prefab=wilson`、`beard` 快照存在且 `last_error_code=nil`；确认后再绑定 B。
+
+### 1.83 2026-09-04：从官方服务端日志读取真实玩家重连结果
+
+- 直接读取 `D:\OneDrive\DST\klei\DoNotStarveTogether\Test\World01\server_log.txt`，没有依赖维护者转贴日志。
+- B=`KU_aUxMQjy7` 已完成重连和官方 SkillTree `handshake_state=3`，但 `player_handshake_restore` 自动重试返回 `SURVIVAL_STATS_RESTORE_MISMATCH`；A=`KU_0vPtVpg3` 已完成实体恢复连接，但截至当前日志末尾仍只记录 `SKILLTREE_HANDSHAKE_REQUIRED`，尚未记录握手完成。
+- 该结果说明跨重启恢复队列和自动重试已触发，但真实玩家恢复尚未通过；已知的两条官方 set-piece angle 错误仍只是启动时原有告警，与本次恢复失败无直接关联。
+- 下一步由管理员执行只读诊断，把队列 state/error、官方握手 state、保存快照五项 SurvivalStats 与当前值写入服务端日志，再由 Agent 读取。
+
+### 1.84 2026-09-04：读取跨重启恢复失败的逐字段值
+
+- 管理员执行只读恢复诊断；服务端返回：A=`KU_0vPtVpg3` 为 `queue=RESTORE_BLOCKED error=SKILLTREE_HANDSHAKE_REQUIRED hs=0`，保存值 `50,0,76.83610990306,17.494423497632,0`，当前值 `112.5,114.6875,193.16666631026,22.549727308469,0`；B=`KU_aUxMQjy7` 为 `queue=RESTORE_BLOCKED error=SURVIVAL_STATS_RESTORE_MISMATCH hs=3`，保存值 `50,19.0625,45.002776995599,17.452782087487,0`，当前值 `50,69.375,54.358333039093,16.205163324614,0`。
+- 结论：A 尚未完成官方握手，不能恢复；B 已完成握手且健康值一致，但饥饿、理智、温度不一致。该诊断在重连后约四分钟执行，当前值可能已发生自然漂移；不过 B 的失败日志在 `00:02:05` 已出现，仍需在同一条命令内立即重试并验证，才能区分恢复 setter 问题和延迟状态漂移。
+- 当前不清理 Instance/恢复队列，也不关闭或重建存档；下一步先让 A 完成官方 SkillTree 握手，并对 B 做一次受控即时恢复验证。
+
+### 1.85 2026-09-04：B 跨重启恢复即时重试通过
+
+- 维护者执行受控 `RetryRestore("KU_aUxMQjy7", player)`；服务端返回 `WP10_RESTORE_B_RETRY:true:nil:queue=RESTORED:error=nil:hs=3`。
+- 同一条命令立即读取的五项值完全一致：保存值与当前值均为 `50,19.0625,45.002776995599,17.452782087487,0`。这证明 B 的真实恢复 setter 和即时校验均通过；首次 `SURVIVAL_STATS_RESTORE_MISMATCH` 是自动重连时序下的暂时失败，不能按最终恢复失败处理。
+- 重连等待期间 B 曾在 `00:05:04` 因原快照低饥饿值死亡，并于 `00:05:10` 复活；该日志说明在恢复被阻挡期间玩家确实处于可运行状态，不改变本次受控即时恢复的结果。A 仍为 `hs=0`、`SKILLTREE_HANDSHAKE_REQUIRED`，恢复队列尚未完全收口。
+
+### 1.86 2026-09-04：A 重新连接后握手与跨重启恢复自动通过
+
+- 直接读取 `server_log.txt`：A=`KU_0vPtVpg3` 于 `00:12:27` 完成认证，`00:12:48` 恢复实体并首次记录 `SKILLTREE_HANDSHAKE_REQUIRED`，随后于 `00:12:49` 记录 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3`，同一时刻自动 `player_handshake_restore` 返回 `RESTORE_COMPLETE`，`pending_restore_count=0`。
+- 结合 1.85 的 B 即时重试结果，两个真实玩家的跨重启 PlayerSandbox 恢复均已完成；A 的第一次重连 handshake state=0 是客户端重连时序未完成，第二次真实重连后由官方握手事件正确收口。
+- B 在 `00:05:04` 和 `00:11:09` 因恢复后的测试快照饥饿值较低自然死亡，并分别在 `00:05:10`、`00:12:38` 复活；这属于测试样本的正常生存状态变化，不改变 B 已经 `RESTORED` 的结论。下一步执行最终 `ValidateCore`、Instance/Zone/Recovery Debug。
+
+### 1.87 2026-09-04：跨重启最终运行时清理通过，但 Core 校验暴露大厅服务失败
+
+- 维护者执行最终一行诊断命令；直接读取官方服务端 `server_log.txt` 与 `server_chat_log.txt`，最终公告为 `WP10_CROSS_RESTART_FINAL:false:LOBBY_SERVICE_INVALID`。
+- 同一时刻 `INSTANCE_LIST` 返回 `instances count=0`、`aborted_on_load=1`；`ZONE_LIST` 返回 `zones total=10 free=10`，`small_01` 的 `reservation_generation=3`；`RESTORE_COMPLETE` 返回 `entries=2 pending=0 blocked=0`；`BACKEND_PENDING` 返回 `records=0 pending=0 submitted=0 transport=not_configured`。
+- 结论：跨重启实例中止、两个真实玩家恢复、恢复队列收口、Zone 释放和后端清理均已完成；最终 `ValidateCore` 唯一失败项是 `LobbyService:Validate()`，不是 Instance、Zone、恢复或 Backend。A/B 随后因测试快照中的低饥饿值自然死亡，属于样本状态变化，不把它误判为恢复数据丢失。
+- 下一步只读检查大厅服务的有效出生点数量与具体失效条件，再决定是否需要代码修复；不直接修改内部状态。
+
+### 1.88 2026-09-04：大厅失败定位为两个恢复玩家共用 point_index=0 会话
+
+- 维护者执行只读大厅诊断；直接读取 `server_chat_log.txt` 得到 `WP10_LOBBY_DIAG:validate=false:LOBBY_SERVICE_INVALID:spawn=8/8:sessions=2:KU_0vPtVpg3=LOBBY,point=0;KU_aUxMQjy7=LOBBY,point=0;closed=false`。
+- 8/8 个大厅出生点全部有效，服务未关闭；失败不是地图或出生点不可用，而是两个恢复后的大厅 Session 都以 `point_index=0` 记录了“当前位置在大厅”的特殊路径。`LobbyService:Validate()` 会继续检查 Session 的 Tile 是否重复，当前结果需要读取两个 Session 的具体 `tile` 与返回坐标确认。
+- 这说明跨重启玩家恢复本身已完成，但恢复后大厅重新入场的幂等/位置分配路径留下了 Core 校验不接受的会话状态；下一步仍先做只读字段核验，再决定最小修复。
+
+### 1.89 2026-09-04：修复大厅重连后的 Portal Tile 冲突
+
+- 维护者提供的逐 Session 诊断确认：A=`KU_0vPtVpg3`、B=`KU_aUxMQjy7` 均为 `state=LOBBY`、`point=0`、`tile=200,200`；两者返回坐标不同但都被映射到同一个 Portal Tile，因此触发 `LobbyService:Validate()` 的重复 Tile 拒绝。
+- 修改 `scripts/agon/world/lobby_service.lua`：`LobbyService.Enter()` 不再把任意大厅当前位置直接登记为 `point_index=0`；仅当当前位置正好对应一个未占用的正式 `spawn_and_return_points` 时才保留，否则使用 `GetSafePoint()` 的安全、未占用、round-robin 分配。Session 的 `return_position` 统一使用最终选定点，避免保留 Portal 中心等无效返回坐标。
+- `git diff --check` 通过；当前没有 Lua/Luac 命令可用，尚未把修复加载到正在运行的专服。下一步重启同一官方 `Test/World01` 以加载 Lua 修改，两个真实玩家重新加入后复查大厅点唯一性与 `ValidateCore`。

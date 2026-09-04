@@ -522,22 +522,32 @@ function LobbyService.Enter(self, player, options)
 
     local selected = nil
     local current_position = options.return_position or GetWorldPosition(player)
-    if current_position ~= nil and IsCurrentPositionInLobby(self, current_position) then
-        selected =
-        {
-            index = 0,
-            relative = nil,
-            tile = GetTileAtWorld(self, current_position),
-            world = CopyValue(current_position),
-        }
-    else
+    local current_tile = current_position ~= nil
+        and GetTileAtWorld(self, current_position)
+        or nil
+    if current_position ~= nil
+        and IsCurrentPositionInLobby(self, current_position)
+        and current_tile ~= nil then
+        local points = self:GetSpawnPoints()
+        for index = 1, #points do
+            local point = points[index]
+            local point_key = PointKey(point.tile)
+            if PointKey(current_tile) == point_key
+                and self.occupied_points[point_key] == nil then
+                selected = CopyValue(point)
+                selected.world = CopyValue(current_position)
+                break
+            end
+        end
+    end
+    if selected == nil then
         selected = self:GetSafePoint(options.point_index)
     end
     if selected == nil then
         return nil, LobbyService.ERROR_CODES.NO_FREE_POINT
     end
 
-    local return_position = CopyValue(current_position or selected.world)
+    local return_position = CopyValue(selected.world)
     local session =
     {
         schema_version = LobbyService.SCHEMA_VERSION,
