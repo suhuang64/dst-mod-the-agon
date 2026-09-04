@@ -316,6 +316,7 @@ local function AttachMethods(zone)
     zone.BeginBuilding = Zone.BeginBuilding
     zone.Activate = Zone.Activate
     zone.BeginResetting = Zone.BeginResetting
+    zone.BeginQuarantinedRecovery = Zone.BeginQuarantinedRecovery
     zone.ReleaseReservation = Zone.ReleaseReservation
     zone.Release = Zone.Release
     zone.Quarantine = Zone.Quarantine

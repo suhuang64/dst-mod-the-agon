@@ -1866,3 +1866,22 @@ docs(base): 修正执行日志文件名
 
 - `WP10_RECOVERY_DIAG` 已确认 `small_01` 为无活动 Instance 的孤立 `QUARANTINED` Zone；受控恢复入口已加入 `InstanceManager`，`git diff --check` 通过。
 - 当前服务器尚未加载该入口；保存现有 Zone 状态并重启后，执行 `RecoverOrphanedZone("small_01", "agon:1:3", ...)`，成功标准为 `ZONE_RECOVERED`、`free=10`、`ValidateCore=true`。
+
+### 2.92 2026-09-04：受控恢复入口加载后的基线
+
+- 重启日志确认新运行时正常加载，`RECOVERY_COMPLETE` 为 `aborted_instance_count=0`、`pending_restore_count=0`、`quarantined_zone_count=0`，`CORE_READY` 为 `instance_count=0`、`free_zone_count=9`。
+- `small_01` 仍是保存下来的孤立 `QUARANTINED` Zone；下一步调用 `RecoverOrphanedZone`，由场景恢复流程验证后释放。
+
+### 2.93 2026-09-04：孤立 Zone 恢复入口发现方法表接线遗漏
+
+- 维护者执行 `RecoverOrphanedZone("small_01", "agon:1:3", ...)`；运行时返回 `attempt to call method 'BeginQuarantinedRecovery' (a nil value)`。
+- 原因是 `Zone.BeginQuarantinedRecovery()` 函数存在，但 `Zone.AttachMethods()` 未把它绑定到具体 Zone 实例；调用在状态转移前失败，`small_01` 仍保持 `QUARANTINED`。
+
+### 2.94 2026-09-04：补齐 Zone 实例方法绑定
+
+- 已在 `Zone.AttachMethods()` 绑定 `BeginQuarantinedRecovery`；下一步重启加载修复，再重新执行同一受控恢复命令。
+
+### 2.95 2026-09-04：Zone 方法绑定修复静态检查通过
+
+- `Zone.AttachMethods()` 的补丁已完成，`git diff --check` 通过，仅有 Git 的 LF/CRLF 提示；恢复入口运行失败前未发生状态转移。
+- 当前下一步为保存并重启，加载修复后的 Zone 方法表，然后重新执行孤立 Zone 恢复。
