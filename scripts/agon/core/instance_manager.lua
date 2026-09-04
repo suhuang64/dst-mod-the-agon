@@ -5,6 +5,7 @@ local Participant = require("agon/core/participant")
 local RulePolicy = require("agon/core/rule_policy")
 local CommonServiceRegistry = require("agon/services/common_service_registry")
 local Schema = require("agon/persistence/schema")
+local SandboxService = require("agon/player/sandbox_service")
 
 local InstanceManager = {}
 InstanceManager.SCHEMA_VERSION = 1
@@ -259,6 +260,7 @@ function InstanceManager.AttachPlayer(self, instance_id, userid, player)
         or participant.instance_id ~= instance_id then
         return false, InstanceManager.ERROR_CODES.PARTICIPANT_NOT_FOUND
     end
+    local reconnecting = participant.state == Participant.STATES.DISCONNECTED
     local attached, attach_code = participant:AttachPlayer(
         player,
         instance.generation,
@@ -282,7 +284,24 @@ function InstanceManager.AttachPlayer(self, instance_id, userid, player)
             )
             return false, "PLAYER_PROFILE_UNAVAILABLE"
         end
-        local entered, sandbox_code = sandbox:Enter(participant, player, profile)
+        local transaction = type(sandbox.GetTransactionObject) == "function"
+            and sandbox:GetTransactionObject(participant)
+            or nil
+        local entered, sandbox_code
+        if reconnecting
+            and transaction ~= nil
+            and transaction.state == SandboxService.STATES.RESTORE_PENDING
+            and transaction.last_error_code
+                == SandboxService.ERROR_CODES.PLAYER_DISCONNECTED
+            and type(sandbox.RebindPlayer) == "function" then
+            entered, sandbox_code = sandbox:RebindPlayer(
+                participant,
+                player,
+                profile
+            )
+        else
+            entered, sandbox_code = sandbox:Enter(participant, player, profile)
+        end
         if not entered then
             participant:MarkDisconnected(
                 "player_sandbox_enter_failed",

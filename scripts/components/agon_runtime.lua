@@ -1114,6 +1114,53 @@ function AgonRuntime:RefreshAllPlayerClassifieds()
     return true
 end
 
+function AgonRuntime:AttachParticipantPlayer(player, participant, operation)
+    if player == nil or participant == nil
+        or self.instance_manager == nil then
+        return false, Diagnostics.ERROR_CODES.PARTICIPANT_NOT_FOUND
+    end
+    if participant.player_ref == player then
+        self:RefreshPlayerClassified(player)
+        return true, "ALREADY_ATTACHED"
+    end
+    if participant.player_ref ~= nil then
+        return false, InstanceManager.ERROR_CODES.PARTICIPANT_ALREADY_ACTIVE
+    end
+
+    local attached, attach_code = self.instance_manager:AttachPlayer(
+        participant.instance_id,
+        player.userid,
+        player
+    )
+    if not attached then
+        Diagnostics.Log(
+            attach_code,
+            {
+                shard_id = self.shard_id,
+                operation = operation or "player_attach",
+                userid = player.userid,
+                instance_id = participant.instance_id,
+            },
+            "Participant player attachment failed"
+        )
+        return false, attach_code
+    end
+    if operation == "player_reconnect_attach" then
+        Diagnostics.Log(
+            Diagnostics.RESULTS.PLAYER_RECONNECTED,
+            {
+                shard_id = self.shard_id,
+                operation = operation,
+                userid = player.userid,
+                instance_id = participant.instance_id,
+            },
+            "Player reattached to the active Instance"
+        )
+    end
+    self:RefreshPlayerClassified(player)
+    return true, attach_code
+end
+
 function AgonRuntime:OnSkillTreeInitialized(player)
     if not self:IsReady() or player == nil
         or not IsNonEmptyString(player.userid) then
@@ -1171,6 +1218,24 @@ function AgonRuntime:OnSkillTreeInitialized(player)
                 or "player restore remains guarded after SkillTree handshake: "
                     .. tostring(restore_code)
         )
+    end
+
+    local participant = self.instance_manager:GetParticipant(player.userid)
+    if restore_entry == nil
+        and participant ~= nil
+        and participant.player_ref == nil then
+        local instance = self.instance_manager:Get(participant.instance_id)
+        local lifecycle = instance ~= nil and instance.lifecycle_state or nil
+        if lifecycle == "CREATED"
+            or lifecycle == "PREPARING"
+            or lifecycle == "RUNNING"
+            or lifecycle == "TRANSITION" then
+            self:AttachParticipantPlayer(
+                player,
+                participant,
+                "player_reconnect_attach"
+            )
+        end
     end
     return true, already_complete and "ALREADY_COMPLETE" or nil
 end
@@ -1237,22 +1302,11 @@ function AgonRuntime:OnPlayerAdded(player)
             and self.lobby_service:GetSession(player.userid) ~= nil then
             self.lobby_service:OnPlayerRemoved(player)
         end
-        local attached, attach_code = self.instance_manager:AttachPlayer(
-            participant.instance_id,
-            player.userid,
-            player
-        )
-        if not attached then
-            Diagnostics.Log(
-                attach_code,
-                {
-                    shard_id = self.shard_id,
-                    operation = "player_attach",
-                    userid = player.userid,
-                    instance_id = participant.instance_id,
-                },
-                "Participant player attachment failed"
-            )
+        -- 玩家必须先通过官方 SkillTree 握手，再进入 Capture/Clean/Apply。
+        -- 握手尚未 READY 时留给 OnSkillTreeInitialized 继续接线，避免
+        -- 先清理实体再因握手门失败而留下半完成事务。
+        if IsOfficialSkillTreeReady(player) then
+            self:AttachParticipantPlayer(player, participant, "player_attach")
         end
     elseif self.lobby_service ~= nil then
         local lobby_session, lobby_code = self.lobby_service:Enter(player)

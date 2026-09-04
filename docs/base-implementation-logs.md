@@ -1394,3 +1394,192 @@ docs(base): 修正执行日志文件名
 - 管理员执行 `/agon.test.player_sandbox status`；服务端返回 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
 - 本轮最终结论：大厅重连后的 Portal Tile 冲突已修复；A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 完成大厅唯一点分配、真实绑定、Wilson/Wathgrithr Character Adapter 快照、PlayerSandbox 进入与恢复、Instance 销毁，以及最终 `ValidateCore=true`/10 个 Zone 全部空闲/恢复队列和 Backend 清空。
 - 测试开关已关闭，运行时恢复默认安全状态；本轮所有执行细节继续保存在本日志中。
+
+### 2.05 2026-09-04：进入下一阶段 WP10 双 Instance 与 Scene 隔离验收
+
+- 本轮单 Instance 双真实玩家验收已完成并安全收尾，但 WP10 的 Base Release Gate 仍未全部满足；尚未覆盖双 Instance 并发、Scene BLOCKING/LIVE_PATCH、跨局无副作用、Spectator/Camera/网络可见性、四阶段重启矩阵、断线重绑定和第二 shard。
+- 按 WP10 验收矩阵，下一阶段选择“双 Instance 与 Scene 隔离”：使用 A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 分属两个 `TEST_MODE` Instance，分别启动后只在 A 执行 Scene 操作，逐项检查 B 不受影响，再完成 A/B 清理和最终 Debug。
+- 当前 `live_player_test` 已关闭；开始下一阶段前需由管理员临时开启，并仅对新建的两个 TestMode Instance 生效。
+
+### 2.06 2026-09-04：双 Instance/Scene 隔离测试开关重新开启
+
+- 直接读取官方 `server_log.txt`；管理员 B=`KU_aUxMQjy7` 再次执行 `/agon.test.player_sandbox on`，服务端于 `04:27:33` 记录 `PLAYER_TEST_ENABLED`。
+- 本阶段使用 A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 各自独立的 `TEST_MODE` Instance；下一步先创建 A 的 Instance，不与 B 共用 Instance。
+
+### 2.07 2026-09-04：双 Instance 隔离测试 A 创建通过
+
+- 维护者创建仅包含 A=`KU_dNpFmz1P` 的 `TEST_MODE` Instance；服务端公告 `WP10_INSTANCE_A_CREATE:agon:1:5:zone=small_01`。
+- 本项 PASS：A 的独立 Instance 为 `agon:1:5`，区域为 `small_01`；尚未绑定玩家，下一步绑定 A 并确认其 PlayerSandbox 状态。
+
+### 2.08 2026-09-04：双 Instance 隔离测试 A 绑定调用通过
+
+- 维护者将 A=`KU_dNpFmz1P` 绑定到 `agon:1:5`，服务端公告 `WP10_ATTACH_A_ISOLATION:true:nil`。
+- 本项为绑定调用初步 PASS；下一步读取 A transaction，确认 `SANDBOXED`、`clean_entered=true`、`wilson` 和 `beard` 快照正常后，再创建 B 的独立 Instance。
+
+### 2.09 2026-09-04：双 Instance 隔离测试 A 沙箱通过
+
+- 维护者读取 A=`KU_dNpFmz1P` 在 `agon:1:5` 的 transaction；服务端返回 `WP10_SANDBOX_A_ISOLATION:state=SANDBOXED:clean=true:prefab=wilson:beard=true:error=nil`。
+- 本项 PASS：A 已完成独立 Instance 的真实 Capture、清理和进入沙箱，Wilson 角色快照正常；下一步创建只包含 B=`KU_aUxMQjy7` 的第二个 Instance。
+
+### 2.10 2026-09-04：双 Instance 隔离测试 B 创建通过
+
+- 维护者创建仅包含 B=`KU_aUxMQjy7` 的第二个 `TEST_MODE` Instance；服务端公告 `WP10_INSTANCE_B_CREATE:agon:1:6:zone=small_02`。
+- 本项 PASS：B 的独立 Instance 为 `agon:1:6`，区域为 `small_02`，与 A=`agon:1:5`/`small_01` 使用不同 Zone；下一步绑定 B 并检查其 PlayerSandbox 状态。
+
+### 2.11 2026-09-04：双 Instance 隔离测试 B 绑定调用通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:6`，服务端公告 `WP10_ATTACH_B_ISOLATION:true:nil`。
+- 本项为绑定调用初步 PASS；下一步读取 B transaction，确认 `SANDBOXED`、`clean_entered=true`、`wathgrithr` 及角色资源快照正常后，再启动 A/B 两个 Instance。
+
+### 2.12 2026-09-04：双 Instance 隔离测试 A/B 沙箱准备通过
+
+- 维护者读取 B=`KU_aUxMQjy7` 在 `agon:1:6` 的 transaction；服务端返回 `WP10_SANDBOX_B_ISOLATION:state=SANDBOXED:clean=true:prefab=wathgrithr:inspiration=true:battleborn=true:error=nil`。
+- 结合 2.08/2.09，A=`KU_dNpFmz1P` 与 B=`KU_aUxMQjy7` 已分别进入独立 Instance 的 `SANDBOXED`，角色快照无错误；下一步启动 A=`agon:1:5`，再启动 B=`agon:1:6`。
+
+### 2.13 2026-09-04：双 Instance 隔离测试 A 启动通过
+
+- 维护者启动 A=`agon:1:5`，服务端公告 `WP10_START_A:true:nil`。
+- A 的生命周期启动调用通过；B=`agon:1:6` 尚未启动，下一步启动 B 并随后读取两局 Instance 的独立状态。
+
+### 2.14 2026-09-04：双 Instance 隔离测试 B 启动通过
+
+- 维护者启动 B=`agon:1:6`，服务端公告 `WP10_START_B:true:nil`。
+- A=`agon:1:5` 与 B=`agon:1:6` 均已完成启动调用；下一步读取双局 Instance/Zone Debug，建立 Scene 修改前的独立状态基线。
+
+### 2.15 2026-09-04：双 Instance Scene 修改前基线通过
+
+- 维护者执行双局 Debug；A=`agon:1:5` 为 `TEST_MODE`、`small_01`、`zone_state=ACTIVE`、`lifecycle=RUNNING`、`generation=3`、`scene_revision=1`、`entities=1`；B=`agon:1:6` 为 `small_02`、同样 `RUNNING`、`generation=3`、`scene_revision=1`、`entities=1`。
+- Zone Debug 返回 `zones total=10 free=8`，仅 `small_01`/`small_02` 分别归属 A/B；恢复队列和 Backend pending 均为 0，Runtime `errors=0`。
+- 本项 PASS：双局初始状态互相独立；下一步只对 A 执行 `BLOCKING_PATCH`，再复查 B 未发生变化。
+
+### 2.16 2026-09-04：A 的 BLOCKING Scene 操作调用通过
+
+- 维护者仅对 A=`agon:1:5` 执行 `ApplyScene("BLOCKING_PATCH", "wp10_scene_A_blocking")`；服务端公告 `WP10_SCENE_A_BLOCKING:true:nil`。
+- 本项为 A 的 Scene 操作调用初步 PASS；下一步只读取 A/B 的 Instance 与 Zone Debug，核对 A 的 phase/revision 变化以及 B 是否保持原状态。
+
+### 2.17 2026-09-04：A 的 BLOCKING 操作未影响 B
+
+- 维护者读取双局 Debug；A=`agon:1:5` 变为 `generation=5`、`scene_revision=2`、`lifecycle=RUNNING`；B=`agon:1:6` 仍为 `generation=3`、`scene_revision=1`、`lifecycle=RUNNING`，两局 `entities=1`。
+- Zone 仍为 `small_01 -> agon:1:5`、`small_02 -> agon:1:6`，总计 `free=8`；恢复队列和 Backend pending 均为 0，Runtime `errors=0`。
+- 本项 PASS：A 的 BLOCKING Scene 操作只改变 A 的 generation/revision，B 未发生跨局变化；下一步只对 A 执行 `LIVE_PATCH_EMPTY`。
+
+### 2.18 2026-09-04：A 的 LIVE_PATCH_EMPTY 调用通过
+
+- 维护者仅对 A=`agon:1:5` 执行 `ApplyScene("LIVE_PATCH_EMPTY", "wp10_scene_A_live_empty")`；服务端公告 `WP10_SCENE_A_LIVE_EMPTY:true:nil`。
+- 本项为 A 的 Live Patch 调用初步 PASS；下一步读取双局 Debug，核对 A 的 Scene revision 与 B 的隔离状态。
+
+### 2.19 2026-09-04：A 的 LIVE_PATCH_EMPTY 未影响 B
+
+- 维护者读取双局 Debug；A=`agon:1:5` 为 `generation=5`、`scene_revision=3`、`lifecycle=RUNNING`、`entities=1`；B=`agon:1:6` 仍为 `generation=3`、`scene_revision=1`、`lifecycle=RUNNING`、`entities=1`。
+- Zone 仍为 A=`small_01`、B=`small_02`，`free=8`；恢复队列和 Backend pending 均为 0，Runtime `errors=0`。
+- 本项 PASS：A 的 Live Patch 只改变 A 的 revision，B 无跨局副作用；下一步对 A 执行占用场景下的 `LIVE_PATCH_OCCUPIED_REJECT`。
+
+### 2.20 2026-09-04：A 的占用场景 Live Patch 正确拒绝
+
+- 维护者仅对 A=`agon:1:5` 执行 `LIVE_PATCH_OCCUPIED_REJECT`；服务端公告 `WP10_SCENE_A_OCCUPIED_REJECT:false:OCCUPIED_TILE`。
+- 本项 PASS：占用 Tile 的 Scene 修改得到明确拒绝码 `OCCUPIED_TILE`，没有把失败报告成成功；下一步读取双局 Debug，确认拒绝前后状态不变。
+
+### 2.21 2026-09-04：占用拒绝操作确认无跨局副作用
+
+- 维护者读取双局 Debug；A=`agon:1:5` 仍为 `generation=5`、`scene_revision=3`、`entities=1`，B=`agon:1:6` 仍为 `generation=3`、`scene_revision=1`、`entities=1`，两局均 `lifecycle=RUNNING`。
+- Zone 仍为 A=`small_01`、B=`small_02`，`free=8`；恢复队列和 Backend pending 均为 0，Runtime `errors=0`。
+- 本项 PASS：`OCCUPIED_TILE` 拒绝保持了原 Scene 和双局隔离；下一步对 A 执行同一 Zone 内允许移动的 `LIVE_PATCH_OCCUPIED_MOVE`。
+
+### 2.22 2026-09-04：A 的同 Zone 安全移动调用通过
+
+- 维护者仅对 A=`agon:1:5` 执行 `LIVE_PATCH_OCCUPIED_MOVE`；服务端公告 `WP10_SCENE_A_OCCUPIED_MOVE:true:nil`。
+- 本项为 A 的允许移动调用初步 PASS；下一步读取双局 Debug，确认 A 的 Scene 更新与 B 的隔离，以及 Zone/实体数量无异常变化。
+
+### 2.23 2026-09-04：A 的 Scene 移动未影响 B
+
+- 维护者读取双局 Debug；A=`agon:1:5` 变为 `generation=5`、`scene_revision=4`、`lifecycle=RUNNING`、`entities=1`；B=`agon:1:6` 仍为 `generation=3`、`scene_revision=1`、`lifecycle=RUNNING`、`entities=1`。
+- Zone 仍为 A=`small_01`、B=`small_02`，`free=8`；恢复队列和 Backend pending 均为 0，Runtime `errors=0`。
+- 本项 PASS：A 的 `LIVE_PATCH_OCCUPIED_MOVE` 只更新 A，B 没有跨局变化；下一步只销毁 A，检查 B 继续运行及 A Zone 回收。
+
+### 2.24 2026-09-04：A 的独立 Instance 销毁调用通过
+
+- 维护者仅销毁 A=`agon:1:5`，服务端公告 `WP10_DESTROY_A_ISOLATION:true:INSTANCE_DESTROYED`。
+- 本项为 A 的正式清理调用初步 PASS；下一步读取 Instance/Zone Debug，确认 B=`agon:1:6` 仍运行、A 的 `small_01` 被释放，且恢复/Backend 状态无新增残留。
+
+### 2.25 2026-09-04：销毁 A 后 B 保持运行且 A Zone 已回收
+
+- 维护者读取 Debug；A=`agon:1:5` 已不存在，`small_01` 为 `FREE`；B=`agon:1:6` 仍为 `zone_state=ACTIVE`、`lifecycle=RUNNING`、`generation=3`、`scene_revision=1`、`entities=1`。
+- Zone 总数 10、空闲 9；恢复队列 `pending=0 blocked=0`，Backend `pending=0`，Runtime `errors=0`。
+- 本项 PASS：销毁 A 没有终止或污染 B，A 的 Zone 和资源已局部回收；下一步销毁 B 完成双 Instance 测试清理。
+
+### 2.26 2026-09-04：双 Instance 隔离测试 B 清理调用通过
+
+- 维护者销毁 B=`agon:1:6`，服务端公告 `WP10_DESTROY_B_ISOLATION:true:INSTANCE_DESTROYED`。
+- A/B 的 Scene 隔离和局部销毁验证已完成；下一步执行最终双 Instance Debug，确认两个 Zone 均释放、实例列表为空且没有恢复/Backend 残留。
+
+### 2.27 2026-09-04：双 Instance/Scene 隔离测试最终 Debug 通过
+
+- 维护者执行最终双局 Debug；服务端公告 `WP10_DUAL_FINAL:true:nil`。
+- 最终状态为 `instances count=0`、`zones total=10 free=10`，A/B 所用 `small_01`/`small_02` 均为 `FREE`；恢复队列 `entries=2 pending=0 blocked=0`，Backend `records=0 pending=0 submitted=0`，Runtime `errors=0`。
+- 本项 PASS：双 Instance 独立启动、A-only BLOCKING/LIVE_PATCH、占用拒绝、同 Zone 移动、A 局部销毁且 B 持续运行，以及最终双局资源清理均已完成。当前只需关闭 live player test 开关并确认默认安全状态。
+
+### 2.28 2026-09-04：双 Instance/Scene 隔离测试开关关闭调用通过
+
+- 直接读取官方 `server_log.txt`；管理员 B=`KU_aUxMQjy7` 于 `04:40:53` 执行 `/agon.test.player_sandbox off`，服务端记录 `PLAYER_TEST_DISABLED`。
+- 本项关闭调用 PASS；下一步执行 `status` 确认 `enabled=false eligible=true`，随后本阶段安全收尾。
+
+### 2.29 2026-09-04：双 Instance/Scene 隔离阶段安全收尾完成
+
+- 管理员执行 `/agon.test.player_sandbox status`；服务端返回 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。
+- 本阶段最终结论：A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 分属 `agon:1:5`/`small_01` 与 `agon:1:6`/`small_02`，A-only BLOCKING/LIVE_PATCH、占用拒绝、同 Zone 移动、A 销毁后 B 持续运行和最终 `ValidateCore=true` 均通过；10 个 Zone、恢复队列和 Backend 均无残留。
+- 下一阶段按 WP10 验收矩阵转向真实玩家断线重绑定；当前仍不宣称 WP10 Base Ready，UI/StateGraph/网络可见性、四阶段重启矩阵、第二 shard 和真实 Backend transport 仍未完成。
+
+### 2.30 2026-09-04：真实玩家断线重绑定测试开关开启
+
+- 直接读取官方 `server_log.txt`；管理员 B=`KU_aUxMQjy7` 于 `04:43:03` 执行 `/agon.test.player_sandbox on`，服务端记录 `PLAYER_TEST_ENABLED`。
+- 本阶段继续使用 A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7`，下一步创建包含两人的单一 `TEST_MODE` Instance，验证活动 Instance 中 A 断线、B 保持正常、A 重连后重新绑定和恢复。
+
+### 2.31 2026-09-04：断线重绑定测试 Instance 创建通过
+
+- 维护者创建包含 A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 的 `TEST_MODE` Instance；服务端公告 `WP10_DISCONNECT_INSTANCE_CREATE:agon:1:7:zone=small_01`。
+- 本项 PASS：断线测试 Instance 为 `agon:1:7`，区域为 `small_01`；尚未绑定玩家，下一步先绑定 A。
+
+### 2.32 2026-09-04：断线重绑定测试 A 绑定调用通过
+
+- 维护者将 A=`KU_dNpFmz1P` 绑定到 `agon:1:7`，服务端公告 `WP10_DISCONNECT_ATTACH_A:true:nil`。
+- 本项为绑定调用初步 PASS；下一步绑定 B=`KU_aUxMQjy7`，然后确认两名玩家均在同一 Instance 的 `SANDBOXED` 状态。
+
+### 2.33 2026-09-04：断线重绑定测试 B 绑定调用通过
+
+- 维护者将 B=`KU_aUxMQjy7` 绑定到 `agon:1:7`，服务端公告 `WP10_DISCONNECT_ATTACH_B:true:nil`。
+- A/B 均已完成绑定调用；下一步读取两名玩家在 `agon:1:7` 的 transaction，确认共同进入 `SANDBOXED` 后再启动 Instance。
+
+### 2.34 2026-09-04：断线重绑定测试双玩家沙箱基线通过
+
+- 维护者读取 `agon:1:7` 的两个 transaction；服务端返回 `WP10_DISCONNECT_SANDBOX:KU_dNpFmz1P:state=SANDBOXED:clean=true:prefab=wilson:error=nil;KU_aUxMQjy7:state=SANDBOXED:clean=true:prefab=wathgrithr:error=nil`。
+- 本项 PASS：A/B 均已进入同一 Instance 的真实沙箱且无错误；下一步启动 `agon:1:7`，然后让 A 单独断线。
+
+### 2.35 2026-09-04：断线重绑定测试 Instance 启动通过
+
+- 维护者启动 `agon:1:7`，服务端公告 `WP10_DISCONNECT_START:true:nil`。
+- A=`KU_dNpFmz1P`、B=`KU_aUxMQjy7` 已处于同一活动 Instance 的沙箱；下一步让 A 单独断开连接，B 保持在线，以验证 Participant/transaction 的断线状态和局部隔离。
+
+### 2.36 2026-09-04：A 单独断线已被服务端确认
+
+- 维护者读取官方 `server_log.txt`；服务端于 `04:49:16` 记录 A=`KU_dNpFmz1P` 的 `SendUserDisconnect`、从 Master 断开以及用户序列化。
+- 同一时间段未发现 B=`KU_aUxMQjy7` 的断线记录；当前应保持 B 在线。
+- 本项只确认网络断线事件已发生，尚未据此宣称断线状态机完成；下一步执行只读 Runtime 诊断，核对 A=`DISCONNECTED`/`RESTORE_PENDING`、B 仍为活动沙箱，以及 Instance/Zone 未被误清理。
+
+### 2.37 2026-09-04：断线状态隔离诊断通过
+
+- 维护者执行只读 Runtime 诊断；服务端返回 `WP10_DISCONNECT_STATE:A_participant=DISCONNECTED:A_player_ref=false:A_tx=RESTORE_PENDING:A_error=PLAYER_SANDBOX_PLAYER_DISCONNECTED:B_participant=READY:B_player_ref=true:B_tx=SANDBOXED:B_error=nil:instance=RUNNING:generation=3`。
+- 本项 PASS：A 的断线只释放了 A 的运行时玩家引用并保留恢复事务；B 仍保持 `READY`、玩家引用有效和 `SANDBOXED`；活动 Instance 未被终止。
+- 下一步让 A=`KU_dNpFmz1P` 重新连接同一服务器，观察其自动重新绑定、SkillTree 握手和恢复队列处理；B 保持在线。
+
+### 2.38 2026-09-04：A 重连自动接线暴露状态机缺口
+
+- A=`KU_dNpFmz1P` 已重新连接并完成官方 SkillTree 握手：服务端记录 `Resuming user`、重新分配 `wilson`，随后输出 `SKILLTREE_HANDSHAKE_COMPLETE ... handshake_state=3`。
+- 但在握手前的自动 `player_attach` 路径中，服务端输出 `PLAYER_SANDBOX_INVALID_STATE`；原因是断线事务仍为 `RESTORE_PENDING`，普通 `SandboxService:Enter()` 直接调用 `EnterCleanState()`，而该方法只接受 `CAPTURED`，没有执行活动 Instance 的重绑定。
+- 本项判定为实现缺陷而非测试失败：设计要求活动 Instance 仍运行时重连者返回原 Instance。下一步补充“握手完成后再 Attach + RESTORE_PENDING 事务原 ID 重绑定”的最小状态机接线，并保留 B 的活动状态。
+
+### 2.39 2026-09-04：断线重绑定最小修复已实现
+
+- `SandboxService` 新增 `RebindPlayer()`：仅接受断线产生的 `RESTORE_PENDING` + `PLAYER_SANDBOX_PLAYER_DISCONNECTED`，复用原 transaction ID，将事务安全回置 `CAPTURED`，重置本轮 adapter context 后重新执行 `Validate → Clean → Apply`，成功时清除断线错误，不创建第二份 snapshot。
+- `InstanceManager.AttachPlayer()` 在 Participant 原状态为 `DISCONNECTED` 且事务符合上述断线条件时改走 `RebindPlayer()`；其他首次进入和非断线恢复仍走原 `Enter()`。
+- `AgonRuntime` 现在在官方 SkillTree 握手尚未 READY 时延迟 Participant Attach，并在 `ms_skilltreeinitialized` 到达后执行活动 Instance 的重连接线；成功时输出 `PLAYER_RECONNECTED`，失败仍保留原错误码和 Participant 隔离。
+- 静态 `git diff --check` 通过；当前尚未重启专服加载新 Lua，尚未重新执行真实 A 重连验收。

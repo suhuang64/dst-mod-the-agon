@@ -252,6 +252,26 @@ local function SaveState(self, transaction, state)
     transaction.updated_at = GetNow(self)
 end
 
+local function ResetRebindContext(transaction)
+    transaction.context = type(transaction.context) == "table"
+        and transaction.context
+        or {}
+    transaction.context.profile = transaction.profile
+    transaction.context.sandbox = type(transaction.context.sandbox) == "table"
+        and transaction.context.sandbox
+        or {}
+    transaction.context.sandbox.profile = transaction.profile
+    transaction.context.sandbox.transaction_id = transaction.transaction_id
+    transaction.context.inventory_profile_applied = nil
+    transaction.context.inventory_overrides_removed = nil
+    transaction.context.stats_profile_applied = nil
+    transaction.context.stats_overrides_removed = nil
+    transaction.context.skilltree_profile_applied = nil
+    transaction.context.skilltree_overrides_removed = nil
+    transaction.context.character_profile_applied = nil
+    transaction.context.character_overrides_removed = nil
+end
+
 function SandboxService.GetTransaction(self, subject)
     local transaction = GetTransaction(self, subject)
     return transaction ~= nil and ExportTransaction(transaction) or nil
@@ -559,6 +579,57 @@ function SandboxService.Enter(self, participant, player, profile)
     return true, transaction.transaction_id
 end
 
+function SandboxService.RebindPlayer(self, participant, player, profile)
+    if self.closed then
+        return false, SandboxService.ERROR_CODES.SERVICE_CLOSED
+    end
+    local transaction = GetTransaction(self, participant)
+    if transaction == nil then
+        return false, SandboxService.ERROR_CODES.TRANSACTION_NOT_FOUND
+    end
+    if transaction.state ~= SandboxService.STATES.RESTORE_PENDING
+        or transaction.last_error_code
+            ~= SandboxService.ERROR_CODES.PLAYER_DISCONNECTED then
+        return false, SandboxService.ERROR_CODES.INVALID_STATE
+    end
+    local player_valid, player_code = EnsurePlayer(self, participant, player)
+    if not player_valid then
+        return false, player_code
+    end
+    local requested_profile, profile_code = PlayerProfile.Normalize(
+        profile or transaction.profile
+    )
+    if requested_profile == nil then
+        return false, profile_code or SandboxService.ERROR_CODES.PROFILE_INVALID
+    end
+    if transaction.profile == nil
+        or transaction.profile.profile_id ~= requested_profile.profile_id
+        or transaction.profile.version ~= requested_profile.version then
+        return false, SandboxService.ERROR_CODES.TRANSACTION_TERMINAL
+    end
+
+    -- 断线只代表旧实体引用失效；原始 snapshot 仍属于同一 transaction。
+    -- 将事务重新置于 CAPTURED 后复用 Enter，确保新实体重新经过完整
+    -- Validate → Clean → Apply pipeline，且不创建第二份 snapshot。
+    transaction.participant_ref = participant
+    transaction.player_ref = player
+    transaction.clean_entered = false
+    transaction.last_error_code = nil
+    transaction.last_error_message = nil
+    ResetRebindContext(transaction)
+    SaveState(self, transaction, SandboxService.STATES.CAPTURED)
+    local rebound, rebind_code = self:Enter(
+        participant,
+        player,
+        requested_profile
+    )
+    if not rebound and transaction.state == SandboxService.STATES.CAPTURE_FAILED then
+        SaveState(self, transaction, SandboxService.STATES.RESTORE_PENDING)
+        SetError(transaction, rebind_code or SandboxService.ERROR_CODES.RESTORE_PENDING)
+    end
+    return rebound, rebind_code
+end
+
 function SandboxService.RetryRestore(self, subject, player)
     local transaction = GetTransaction(self, subject)
     if transaction == nil then
@@ -687,6 +758,7 @@ local function AttachMethods(service)
     service.EnterCleanState = SandboxService.EnterCleanState
     service.ApplyPlayerProfile = SandboxService.ApplyPlayerProfile
     service.RestoreOriginal = SandboxService.RestoreOriginal
+    service.RebindPlayer = SandboxService.RebindPlayer
     service.ValidateRestore = SandboxService.ValidateRestore
     service.Enter = SandboxService.Enter
     service.RetryRestore = SandboxService.RetryRestore
