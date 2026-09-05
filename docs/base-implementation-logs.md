@@ -154,3 +154,22 @@
 - 已将原约 27 万字、2567 行的逐条执行记录整理为本关键摘要，保留长期约束、用户决策、WP 状态、重要失败根因与修复、最终验收和未完成边界。
 - 已同步更新 `docs/base-design.md` 与 `docs/base-implementation-plan.md`：默认追加精简里程碑；维护者明确要求时允许压缩重复回显，但不得掩盖关键证据或风险。
 - 本次仅整理文档，没有修改官方源码、玩家存档或测试配置；未执行 commit/push。
+
+### 2026-09-05：WP10——跨重启物品恢复与活动实例校验复测
+
+- 根因/修改：活动实例校验曾因 `EntityProfileService` 缺少 `service_id` 触发 `INSTANCE_INVARIANT_FAILED`；已补齐服务标识。Inventory 持久化修复保持快照中的 `prefab/save_record`，不写入运行时实体引用。
+- 跨重启服务端证据：`Test/World01` 的实例 `agon:1:26` 按 `ABORT_ON_RESTART` 中止后，A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 重连并完成官方 SkillTree `handshake_state=3`；两人的恢复队列均为 `RESTORED`、错误为 nil，B 实际恢复 `spear_wathgrithr`、`wathgrithrhat`、`spoiled_food`。
+- 最终证据：`ValidateCore=true:nil`、`core=READY`、`instances=0`、10 个 Zone 全部 FREE；随后 `c_save()` 成功且没有新增持久化错误。本条补足此前未单独执行的真实跨重启存档恢复测试。
+- 边界/收尾：仍有历史 `pending_restore_count=2` 和未配置 transport 的 `backend_pending_count=4`，不属于本次活动实例泄漏；当前服务器保持运行、两名客户端在线。跨 shard、真实 Backend transport 和完整重启矩阵仍未验证；当前 Git 工作区干净，建议 Commit：`fix(base): 修复活动实例校验与跨重启物品恢复`。
+
+### 2026-09-05：WP10——死亡策略与四阶段重启矩阵补测
+
+- GHOST：真实双客户端中 A=`KU_q87X36VY` 可在场地安全范围内活动，B=`KU_aUxMQjy7` 正常活动；服务端确认死亡记录和 `GHOST` 策略生效，复活及销毁后无 Instance/Zone 泄漏。真实 REVIVABLE_CORPSE 因当前 ENDLESS 测试世界的玩家没有 `revivablecorpse` 组件，仅保留 WP8 合成诊断通过，不冒充真实客户端通过。
+- 重启矩阵：空 Instance 分别在 `PREPARING`（`agon:1:30`）、`TRANSITION`（`agon:1:31`）和 `FINISHING`（`agon:1:32`）保存并重启；每次均 `aborted_on_load=1`、活动 Instance 为 0、10 个 Zone 全部 `FREE`、`ValidateCore=true:nil`、无新增错误。RUNNING 阶段的真实双客户端跨重启恢复已由前条 `agon:1:26` 记录覆盖。
+- 边界/收尾：本轮 TRANSITION/FINISHING 是无玩家的生命周期持久化边界测试，不等同于带真实 Scene/玩家的完整阶段矩阵；跨 shard、真实 Backend transport、完整故障注入和生产 UI 仍未验证。当前 `Test/World01` 服务端保持 `CORE_READY`，没有活动 Instance；重启使远端客户端断开，未确认其重新加入。
+
+### 2026-09-05：WP10——真实玩家 TRANSITION/FINISHING 重启恢复
+
+- `agon:1:33` 由 A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 真实接入并进入 `TRANSITION`；重启后两人均完成官方 `handshake_state=3`，恢复队列正常回收，Instance 按 `ABORT_ON_RESTART` 中止且 Zone 释放。
+- `agon:1:34` 由同一 A/B 真实接入并进入 `FINISHING`；重启后两人均完成握手和恢复，最终确认 `instances=0`、10 个 Zone 全部 `FREE`、`ValidateCore=true:nil`、无新增错误。
+- 边界/收尾：这两项补足了带真实玩家的 TRANSITION/FINISHING 重启证据；仍未覆盖第二 shard、真实 Backend transport、生产 UI 和完整故障注入矩阵。当前 `Test/World01` 服务端保持 `CORE_READY`、无活动 Instance；本轮重启后 A/B 已恢复在线，live player test 按重启策略为关闭。

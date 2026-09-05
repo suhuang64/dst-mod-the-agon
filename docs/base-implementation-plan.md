@@ -1315,6 +1315,10 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 维护者确认 A 客户端物品栏/装备栏/制作栏隐藏且不可打开；退出后 `yellowamulet`/`orangeamulet`/`beard_sack_1` 的原槽位、装备槽和 A 归属恢复，Instance 销毁、10 个 Zone 释放、`ValidateCore=true`、`live_player_test=off`。Spectator 物品硬隔离子项完成真实双客户端验收；WP10 总 Gate 仍保留第二 shard、完整重启矩阵、真实 Backend transport 等集成未完成项。
 - 2026-09-05 维护者补报退出观战后建造栏未恢复；根因是客户端隐藏时将 `craftingshown=false` 并禁用 `craftingmenu`，旧恢复路径只恢复 Inventory。已修正 `spectator_hud.lua` 的退出顺序和制作 widget 的 `Enable/Show`，需重启客户端进行回归，未将建造栏修复标记为通过。
 - 2026-09-05 维护者补报观战场地出现不可交互的 A/Wilson 残影；根因是 `CreateEcho()` 把 `agon_spectator_echo` 放到了场地 spectator anchor。已修正为优先使用大厅 `lobby_return_position`，真实双客户端复测确认场地无残影、残影位于大厅，退出观战和 Instance 清理正常。
+- 2026-09-05 已完成真实跨重启物品恢复复测：`agon:1:26` 按 `ABORT_ON_RESTART` 中止后，A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 重连并在官方 SkillTree `handshake_state=3` 后恢复；两人队列均为 `RESTORED`，B 的 `spear_wathgrithr`、`wathgrithrhat`、`spoiled_food` 实际回到物品栏，`ValidateCore=true:nil`，随后 `c_save()` 无新增持久化错误。`EntityProfileService` 已补齐 `service_id`，活动实例校验通过；跨 shard、真实 Backend transport 和完整重启矩阵仍未完成。
+- 2026-09-05 已补测真实 GHOST 行为：A=`KU_q87X36VY` 可在场地安全范围内移动，B=`KU_aUxMQjy7` 不受影响；服务端记录 `GHOST` 策略、复活和清理均正常。当前 ENDLESS 测试世界真实玩家无 `revivablecorpse` 组件，因此 REVIVABLE_CORPSE 仅计合成 WP8 诊断通过。
+- 2026-09-05 已补测空 Instance 的重启矩阵：`PREPARING`、`TRANSITION`、`FINISHING` 分别保存后重启，均按 `ABORT_ON_RESTART` 中止，`aborted_on_load=1`、`instances=0`、10 个 Zone FREE、`ValidateCore=true:nil`、无新增错误；这三项是生命周期持久化边界证据，不替代带真实玩家/Scene 的完整阶段矩阵。跨 shard、真实 Backend transport 和完整故障注入仍未完成。
+- 2026-09-05 已补测带真实 A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 的 `TRANSITION`/`FINISHING` 重启恢复：`agon:1:33` 与 `agon:1:34` 均在官方 `handshake_state=3` 后完成玩家恢复，Instance 按 `ABORT_ON_RESTART` 中止，10 个 Zone 释放，`ValidateCore=true:nil`、无新增错误。该证据补足真实玩家阶段，但不替代第二 shard、真实 Backend transport、生产 UI 和完整故障注入验收。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit
