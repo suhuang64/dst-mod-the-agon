@@ -6,6 +6,8 @@ local EntityProfileRegistry = require("agon/services/entity_profile_registry")
 
 local EntityProfileService = {}
 EntityProfileService.SCHEMA_VERSION = 1
+EntityProfileService.SERVICE_ID = "entity_profiles"
+EntityProfileService.SERVICE_VERSION = 1
 
 EntityProfileService.ERROR_CODES =
 {
@@ -781,6 +783,8 @@ function EntityProfileService.New(instance, services, options)
     local service = AttachMethods(
     {
         schema_version = EntityProfileService.SCHEMA_VERSION,
+        service_id = EntityProfileService.SERVICE_ID,
+        service_version = EntityProfileService.SERVICE_VERSION,
         instance = instance,
         instance_id = instance_id,
         services = services or {},
