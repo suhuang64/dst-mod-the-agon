@@ -354,7 +354,7 @@ local function GiveContainerItem(container, item, slot)
     return actual_ok and actual == item
 end
 
-local function BuildRestoredItem(descriptor, created_items, resolving, resolved)
+local function BuildRestoredItem(descriptor, created_items, resolving)
     if type(descriptor) ~= "table" or resolving[descriptor] then
         return nil, InventoryAdapter.ERROR_CODES.RESTORE_ITEM_INVALID
     end
@@ -383,8 +383,7 @@ local function BuildRestoredItem(descriptor, created_items, resolving, resolved)
                 local child, child_code = BuildRestoredItem(
                     child_descriptor,
                     created_items,
-                    resolving,
-                    resolved
+                    resolving
                 )
                 if child == nil or not GiveContainerItem(container, child, slot) then
                     resolving[descriptor] = nil
@@ -395,9 +394,6 @@ local function BuildRestoredItem(descriptor, created_items, resolving, resolved)
     end
 
     resolving[descriptor] = nil
-    if spawned then
-        table.insert(resolved, { descriptor = descriptor, item = item })
-    end
     return item
 end
 
@@ -442,6 +438,21 @@ local function GiveActiveInventoryItem(inventory, item)
     end
     local actual_ok, actual = pcall(inventory.GetActiveItem, inventory)
     return actual_ok and actual == item
+end
+
+local function ItemMatchesDescriptor(item, descriptor)
+    if descriptor == nil then
+        return item == nil
+    end
+    if not IsValidObject(item) then
+        return false
+    end
+    if IsValidObject(descriptor.runtime_ref) then
+        return item == descriptor.runtime_ref
+    end
+    local expected_prefab = GetDescriptorPrefab(descriptor)
+    return expected_prefab ~= nil
+        and Util.GetItemPrefab(item) == expected_prefab
 end
 
 function InventoryAdapter.EnterCleanState(player)
@@ -550,7 +561,6 @@ local function RestoreLive(player, data)
     end
 
     local created_items = {}
-    local resolved = {}
     local resolving = {}
     local plan =
     {
@@ -568,8 +578,7 @@ local function RestoreLive(player, data)
             local item, item_code = BuildRestoredItem(
                 descriptor,
                 created_items,
-                resolving,
-                resolved
+                resolving
             )
             if item == nil then
                 return Fail(item_code)
@@ -582,8 +591,7 @@ local function RestoreLive(player, data)
             local item, item_code = BuildRestoredItem(
                 descriptor,
                 created_items,
-                resolving,
-                resolved
+                resolving
             )
             if item == nil then
                 return Fail(item_code)
@@ -599,8 +607,7 @@ local function RestoreLive(player, data)
         local item, item_code = BuildRestoredItem(
             data.active_item,
             created_items,
-            resolving,
-            resolved
+            resolving
         )
         if item == nil then
             return Fail(item_code)
@@ -630,10 +637,6 @@ local function RestoreLive(player, data)
         return Fail(InventoryAdapter.ERROR_CODES.RESTORE_FAILED)
     end
 
-    for index = 1, #resolved do
-        local entry = resolved[index]
-        entry.descriptor.runtime_ref = entry.item
-    end
     return true
 end
 
@@ -660,24 +663,18 @@ local function ValidateLiveRestore(player, data)
         if descriptor == nil and actual ~= nil then
             return false, InventoryAdapter.ERROR_CODES.RESTORE_MISMATCH
         end
-        if descriptor ~= nil and actual ~= descriptor.runtime_ref then
+        if not ItemMatchesDescriptor(actual, descriptor) then
             return false, InventoryAdapter.ERROR_CODES.RESTORE_MISMATCH
         end
     end
     for equipment_slot, descriptor in pairs(data.equipment or {}) do
         local actual = inventory:GetEquippedItem(equipment_slot)
-        if descriptor == nil and actual ~= nil then
-            return false, InventoryAdapter.ERROR_CODES.RESTORE_MISMATCH
-        end
-        if descriptor ~= nil and actual ~= descriptor.runtime_ref then
+        if not ItemMatchesDescriptor(actual, descriptor) then
             return false, InventoryAdapter.ERROR_CODES.RESTORE_MISMATCH
         end
     end
     local active = inventory:GetActiveItem()
-    if data.active_item == nil and active ~= nil then
-        return false, InventoryAdapter.ERROR_CODES.RESTORE_MISMATCH
-    end
-    if data.active_item ~= nil and active ~= data.active_item.runtime_ref then
+    if not ItemMatchesDescriptor(active, data.active_item) then
         return false, InventoryAdapter.ERROR_CODES.RESTORE_MISMATCH
     end
     return true
