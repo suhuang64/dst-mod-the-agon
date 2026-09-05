@@ -606,7 +606,8 @@ local function IsSpectatorInventory(self)
 end
 
 local function InstallPlayerInventoryMethods(state, inventory)
-    state.methods = CaptureStableMethods(inventory, state.method_names)
+    state.methods = state.methods
+        or CaptureStableMethods(inventory, state.method_names)
     for index = 1, #state.method_names do
         local name = state.method_names[index]
         local original = state.methods.original[name]
@@ -633,7 +634,8 @@ local function InstallPlayerInventoryMethods(state, inventory)
 end
 
 local function InstallPlayerBuilderMethods(state, builder)
-    state.builder_methods = CaptureStableMethods(builder, BUILDER_METHODS)
+    state.builder_methods = state.builder_methods
+        or CaptureStableMethods(builder, BUILDER_METHODS)
     for index = 1, #BUILDER_METHODS do
         local name = BUILDER_METHODS[index]
         local original = state.builder_methods.original[name]
@@ -664,6 +666,22 @@ function Guard.Capture(player)
         return { available = false }, nil
     end
 
+    local method_names = {}
+    for index = 1, #INVENTORY_METHODS do
+        method_names[index] = INVENTORY_METHODS[index]
+    end
+    table.insert(method_names, "OnSave")
+
+    local components = GetComponents(player)
+    local builder = components ~= nil and components.builder or nil
+    local methods = CaptureStableMethods(inventory, method_names)
+    local builder_methods = CaptureStableMethods(builder, BUILDER_METHODS)
+
+    -- 捕获前先恢复到本进程首次看到的官方方法。这样上一次进入观战
+    -- 中途失败留下的包装不会遮蔽真实槽位，也不会成为新的恢复基线。
+    RestoreMethods(inventory, methods)
+    RestoreMethods(builder, builder_methods)
+
     local data, capture_code = InventoryAdapter.Capture(player)
     if data == nil then
         return nil, capture_code or Guard.ERROR_CODES.CAPTURE_FAILED
@@ -679,22 +697,19 @@ function Guard.Capture(player)
         inventory = inventory,
         isopen = inventory ~= nil and inventory.isopen or false,
         isvisible = inventory ~= nil and inventory.isvisible or false,
-        method_names = {},
-        builder = GetComponents(player) ~= nil
-            and GetComponents(player).builder or nil,
-        builder_methods = nil,
+        method_names = method_names,
+        methods = methods,
+        builder = builder,
+        builder_methods = builder_methods,
         save_captured = false,
         save_data = nil,
         save_references = nil,
     }
-    for index = 1, #INVENTORY_METHODS do
-        state.method_names[index] = INVENTORY_METHODS[index]
-    end
-    table.insert(state.method_names, "OnSave")
 
-    if inventory ~= nil and type(inventory.OnSave) == "function" then
+    local original_on_save = methods.original.OnSave
+    if inventory ~= nil and type(original_on_save) == "function" then
         local ok, save_data, save_references = pcall(
-            inventory.OnSave,
+            original_on_save,
             inventory
         )
         if not ok then
@@ -703,12 +718,6 @@ function Guard.Capture(player)
         state.save_captured = true
         state.save_data = save_data
         state.save_references = save_references
-    end
-    if state.builder ~= nil then
-        state.builder_methods = CaptureStableMethods(
-            state.builder,
-            BUILDER_METHODS
-        )
     end
     return state
 end
@@ -724,6 +733,8 @@ function Guard.Apply(player, state)
 
     local cleaned, clean_code = true, nil
     if not state.synthetic then
+        local inventory = GetInventoryComponent(player)
+        RestoreMethods(inventory, state.methods)
         local cleanup_before = player._agon_spectator_guard_cleanup
         player._agon_spectator_guard_cleanup = true
         cleaned, clean_code = InventoryAdapter.EnterCleanState(player)
