@@ -1303,6 +1303,9 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 已接线真实 A=`KU_0vPtVpg3` 与 B=`KU_aUxMQjy7`：B 作为 Instance Participant，A 作为 Spectator 跟随 B；服务端确认 guard 已应用且 A 的 inventory `open=false/visible=false`、槽位/装备槽为空、坐标与 B 一致。下一步等待 A 客户端 UI 和输入路径确认。
 - 2026-09-05 真实装备夹具再次进入观战暴露旧 Inventory wrapper 残留，返回 `SPECTATOR_PLAYER_GUARD_FAILED/INVENTORY_CLEAN_FAILED`；已改为按组件弱引用保存官方 Inventory/Builder 方法基线，避免恢复旧 wrapper 或重复套包装，需重启复测。
 - 2026-09-05 已安全销毁失败测试实例、停服并重启当前修复；`LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY` 全部正常。当前等待两名客户端完成重新加入，再复测真实装备夹具。
+- 2026-09-05 稳定方法基线的首次实服复测仍在真实 `yellowamulet`/`orangeamulet` 装备状态下返回 `SPECTATOR_PLAYER_GUARD_FAILED`；失败后仍可观察到 Inventory wrapper 残留，不能将真实装备重入标记为通过。
+- 2026-09-05 已把 Inventory/Builder 官方方法基线提前到 `Guard.Capture`，并在 `InventoryAdapter.Capture` 和 live clean 前恢复基线，同时捕获官方 `OnSave`；该修复不删除物品、不改写持久化快照。源码静态 diff 检查通过；本机没有 Lua 解释器，语法验证需依赖专服加载。
+- 2026-09-05 当前新进程已重新输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`；在线查询暂只发现 A=`KU_0vPtVpg3`，需 B=`KU_aUxMQjy7` 重新进入后继续真实装备重入、服务端硬隔离、客户端 UI 和退出恢复验收。
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。

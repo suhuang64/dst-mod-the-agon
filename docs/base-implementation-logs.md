@@ -2502,3 +2502,12 @@ docs(base): 修正执行日志文件名
 - 已销毁失败测试实例并安全停服；关闭时保存用户和世界均完成，进程退出码为 `0`。
 - 已用当前源码重新启动 `Test/World01`；服务器输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`，无本 Mod Lua 加载错误；两条已知 set-piece angle 报错仍暂不处理。
 - 重启后的在线玩家查询暂为空；服务器收到旧客户端的未完成握手并按官方流程关闭，未把半连接状态当作有效玩家。待两名客户端完成重新加入后，复测带 `yellowamulet`/`orangeamulet` 真实物品的 Spectator 进入、退出恢复和服务端硬隔离。
+
+### 3.103 2026-09-05：稳定方法基线的首次实服复测仍暴露真实装备重入失败
+
+- 重启后开启 live player test，创建 `agon:1:24`；B=`KU_aUxMQjy7` 作为唯一 Participant 成功 Attach/Start，A=`KU_0vPtVpg3` 留在大厅并成功进入 Spectator。一次状态查询误用了不存在的 `instance_manager:GetInstance()`，仅产生诊断错误；改用 `Get()` 后以 `DebugInstances()` 确认 Instance 实际为 `RUNNING`。
+- 空背包观战基线通过：服务端公告 `WP10_PATCH_SPECTATOR_BASE:state=SPECTATING:target=KU_aUxMQjy7:guard=true:inventory_open=false:inventory_visible=false:A_pos=-632,260:B_pos=-632,260`；退出准备返回 `WP10_PATCH_SPECTATOR_EXIT_PREP:true:nil`。
+- 为 A 放入并装备真实 `yellowamulet`，再放入 `orangeamulet`；服务端确认 `give_y=3`、`give_o=4`、`equip_y=true`、`yellow_slot=body`、`orange_slot=4`，两件测试物品 owner 均为 A。带真实装备状态重新进入仍返回 `WP10_PATCH_SPECTATOR_REENTER:false:SPECTATOR_PLAYER_GUARD_FAILED:state=nil`。
+- 失败后 A 已回到普通玩家状态，但诊断仍看到 `slots=1=yellowamulet|2=orangeamulet|4=orangeamulet`、`equips=body=yellowamulet|beard=beard_sack_1`，且 `GetItemInSlot`/`Unequip` 指向当前 `spectator_inventory_guard.lua` wrapper；说明此前 wrapper 残留问题尚未彻底解决，不能把真实装备重入标记为通过。
+- 已进一步修正 `Guard.Capture`：在调用 `InventoryAdapter.Capture` 之前建立并恢复 Inventory/Builder 的稳定方法基线，捕获官方 `OnSave`，并在清理前显式剥离旧 wrapper；`Apply` 也先恢复该基线再执行 live clean。注释保持中文，未删除物品或改写存档快照。
+- 失败 Instance 已通过 `DestroyInstance("agon:1:24", "wp10_inventory_guard_patch_cleanup")` 安全销毁，live player test 已关闭；旧服务器进程的控制台输入未能结束进程，因用户已授权重启而按精确 PID 停止后重新启动。新进程输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，但当前在线查询只发现 A=`KU_0vPtVpg3`，B 尚未出现在 `AllPlayers`，需 B 重新连接后继续实测。

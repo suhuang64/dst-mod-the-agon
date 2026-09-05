@@ -613,7 +613,8 @@ local function InstallPlayerInventoryMethods(state, inventory)
         local original = state.methods.original[name]
         if type(original) == "function" then
             rawset(inventory, name, function(self, ...)
-                if IsSpectatorInventory(self) then
+                if IsSpectatorInventory(self)
+                    and not IsGuardCleanup(self.inst) then
                     return GetBlockedInventoryResult(name)
                 end
                 return original(self, ...)
@@ -625,7 +626,8 @@ local function InstallPlayerInventoryMethods(state, inventory)
     if type(original_on_save) == "function"
         and state.save_captured then
         rawset(inventory, "OnSave", function(self, ...)
-            if IsSpectatorInventory(self) then
+            if IsSpectatorInventory(self)
+                and not IsGuardCleanup(self.inst) then
                 return state.save_data, state.save_references
             end
             return original_on_save(self, ...)
@@ -641,7 +643,8 @@ local function InstallPlayerBuilderMethods(state, builder)
         local original = state.builder_methods.original[name]
         if type(original) == "function" then
             rawset(builder, name, function(self, ...)
-                if self ~= nil and IsSpectator(self.inst) then
+                if self ~= nil and IsSpectator(self.inst)
+                    and not IsGuardCleanup(self.inst) then
                     return GetBlockedBuilderResult(name)
                 end
                 return original(self, ...)
@@ -676,11 +679,6 @@ function Guard.Capture(player)
     local builder = components ~= nil and components.builder or nil
     local methods = CaptureStableMethods(inventory, method_names)
     local builder_methods = CaptureStableMethods(builder, BUILDER_METHODS)
-
-    -- 捕获前先恢复到本进程首次看到的官方方法。这样上一次进入观战
-    -- 中途失败留下的包装不会遮蔽真实槽位，也不会成为新的恢复基线。
-    RestoreMethods(inventory, methods)
-    RestoreMethods(builder, builder_methods)
 
     local data, capture_code = InventoryAdapter.Capture(player)
     if data == nil then
@@ -733,8 +731,6 @@ function Guard.Apply(player, state)
 
     local cleaned, clean_code = true, nil
     if not state.synthetic then
-        local inventory = GetInventoryComponent(player)
-        RestoreMethods(inventory, state.methods)
         local cleanup_before = player._agon_spectator_guard_cleanup
         player._agon_spectator_guard_cleanup = true
         cleaned, clean_code = InventoryAdapter.EnterCleanState(player)
@@ -762,8 +758,6 @@ local function RestoreLiveInventory(player, state)
     if inventory == nil then
         return false, Guard.ERROR_CODES.RESTORE_FAILED
     end
-    RestoreMethods(inventory, state.methods)
-
     local old_spectator = player.is_spectator
     local old_cleanup = player._agon_spectator_guard_cleanup
     player.is_spectator = nil
@@ -787,8 +781,6 @@ function Guard.Restore(player, state)
         return true
     end
     local ok, code
-    RestoreMethods(state.inventory, state.methods)
-    RestoreMethods(state.builder, state.builder_methods)
     if state.synthetic then
         local old_spectator = player.is_spectator
         player.is_spectator = nil
