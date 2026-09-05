@@ -38,7 +38,7 @@
 | WP4 | Participant、Instance 归属、InstanceRng、RulePolicy、Audience、classified、RPC 幂等和跨局交互拒绝已完成；真实跨 shard 仍未验证。 |
 | WP5 | ParticipantGroup、Common Services 注册/生命周期和服务端诊断已完成。 |
 | WP6 | EntityProfileRegistry/Service、Prefab/Profile 约束、子实体归属、显示状态和清理已完成。 |
-| WP7 | PlayerSandbox、统一 Profile、Inventory/SurvivalStats/SkillTree/Character adapters、恢复事务和失败隔离已完成；真实 live-safe 角色当前只覆盖 `wilson`/`wathgrithr`。 |
+| WP7 | PlayerSandbox、统一 Profile、Inventory/SurvivalStats/SkillTree/Character adapters、恢复事务和失败隔离已完成；默认 Character adapter 已登记官方 19 个角色及安全能力边界。 |
 | WP8 | Lobby、Spectator、FOLLOW、Echo、死亡策略和客户端观战输入边界已完成；真实双客户端已验证主要链路。 |
 | WP9 | 纯数据 schema/migration、恢复队列、重启中止、Zone quarantine、RPC/Audience 快照收口和 BackendAdapter pending/幂等边界已完成。 |
 | WP10 | 主要目标是集成验收和缺陷修复，不新增正式玩法架构；单 shard Test/World01 的主要安全链路已通过，完整 Base Release Gate 仍有下方未覆盖项。 |
@@ -71,7 +71,7 @@
 
 ### SkillTree、角色与玩家沙箱
 
-- 初始真实绑定因没有官方 live 角色快照安全来源返回 `CHARACTER_LIVE_STATE_UNSUPPORTED`；当前仅为 `wilson`/`wathgrithr` 接入官方可验证数据，并拒绝未注册角色、活动歌曲、非零 battleborn、跟随者/宠物/召唤实体等未知 live 状态。
+- 初始真实绑定因没有官方 live 角色快照安全来源返回 `CHARACTER_LIVE_STATE_UNSUPPORTED`；2026-09-05 已扩展为官方 19 角色能力表：静态角色、beard 和各角色官方组件均有明确接线；活动宠物/变身/模块/运输/小游戏等不可安全拆分状态仍拒绝进入。
 - 官方 SkillTree 握手接线经过修正；真实 A/B 均已出现 `SKILLTREE_HANDSHAKE_COMPLETE` 且 `handshake_state=3`。
 - 角色沙箱 Capture/Clean/Restore 不删除物品、不覆盖进入前快照；服务端故障时保留原引用并进入可重试状态。
 
@@ -126,7 +126,7 @@
 - 尚未完成完整 PREPARING/RUNNING/TRANSITION/FINISHING 四阶段真实玩家重启矩阵，以及所有故障注入下的真实客户端恢复清理。
 - Backend transport 尚未配置；已验证 pending、不可变记录和幂等边界，未验证真实网络提交、重复奖励/结算联调。
 - 尚未系统压测远距离网络实体可见性、camera bounds、多个 Instance 的网络/Task 数量和性能；StateGraph/完整动画覆盖也有限。
-- 真实 live Character adapter 当前只支持 `wilson`/`wathgrithr` 的明确安全子集；其他角色必须先有官方快照和恢复契约。
+- 真实 live Character adapter 已登记官方 19 角色，但每个角色的瞬时状态仍受安全门约束；完整多角色客户端逐字段恢复尚待实测。
 - 两条官方 set-piece angle 告警仍按维护者决定只记录、不处理；不要为了消除日志伪造 `monkeyqueen`、`monkeyportal`、`hermitcrab_marker` 或 `beebox_hermit`。
 
 ---
@@ -173,3 +173,15 @@
 - `agon:1:33` 由 A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 真实接入并进入 `TRANSITION`；重启后两人均完成官方 `handshake_state=3`，恢复队列正常回收，Instance 按 `ABORT_ON_RESTART` 中止且 Zone 释放。
 - `agon:1:34` 由同一 A/B 真实接入并进入 `FINISHING`；重启后两人均完成握手和恢复，最终确认 `instances=0`、10 个 Zone 全部 `FREE`、`ValidateCore=true:nil`、无新增错误。
 - 边界/收尾：这两项补足了带真实玩家的 TRANSITION/FINISHING 重启证据；仍未覆盖第二 shard、真实 Backend transport、生产 UI 和完整故障注入矩阵。当前 `Test/World01` 服务端保持 `CORE_READY`、无活动 Instance；本轮重启后 A/B 已恢复在线，live player test 按重启策略为关闭。
+
+### 2026-09-05：WP7/WP10——官方角色适配器扩展
+
+- 根因/修改：原默认适配器仅覆盖 `wilson`/`wathgrithr`；现扩展为官方 19 角色能力表，接入静态角色、`beard` 及各角色官方组件的捕获/清理/恢复契约；高风险活动状态继续拒绝进入。
+- 验证：专服重载进入 `CORE_READY`；Runtime 注册表返回 19 个角色；WP4–WP9 与 `ValidateCore=true:nil` 全通过。
+- 边界/收尾：本轮未逐一切换 19 个真实客户端角色做 Capture/Restore；当前 `Test/World01` 无活动 Instance、10 个 Zone FREE、live player test 关闭。建议 Commit：`feat(the-agon): 扩展官方角色状态适配`。
+
+### 2026-09-05：WP10——19 角色公平状态覆盖
+
+- 决策/范围：进入 `TEST_MODE` 的真实参与者统一公平状态，保留角色外观；退出时撤销运行时覆盖并恢复进入前快照。
+- 根因/修改：新增 `fair_state.lua`，统一生命/饥饿 `150/150`、理智 `200/200`、温度 `25`、潮湿 `0`、移动 `4/6`，移除角色专属标签并中和已登记的角色组件/回调；SkillTree 激活、经验和选择入口拒绝。
+- 验证/边界：专服重载已出现 `LOADING LUA SUCCESS`、19 个角色注册、`CORE_READY`；WP4–WP9 与 `ValidateCore=true:nil` 全通过，10 个 Zone FREE、无新增错误。当前 live 测试开关已开启，等待与维护者进行真实客户端角色公平字段和退出恢复验证；尚未将 19 个角色逐一客户端实测写成通过。建议 Commit：`feat(the-agon): 为真实 TestMode 接入公平角色状态`。

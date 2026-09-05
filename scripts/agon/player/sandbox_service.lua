@@ -268,8 +268,12 @@ local function ResetRebindContext(transaction)
     transaction.context.stats_overrides_removed = nil
     transaction.context.skilltree_profile_applied = nil
     transaction.context.skilltree_overrides_removed = nil
+    transaction.context.skilltree_fair_guard = nil
     transaction.context.character_profile_applied = nil
     transaction.context.character_overrides_removed = nil
+    transaction.context.fair_character_state = nil
+    transaction.context.fair_character_profile_applied = nil
+    transaction.context.fair_character_profile_removed = nil
 end
 
 function SandboxService.GetTransaction(self, subject)

@@ -892,13 +892,12 @@ PlayerProfile 可以声明基础三维、移动速度、初始装备、技能树
 
 #### 6.3.1 当前真实角色适配范围
 
-WP10 的真实玩家验收先采用显式、可审计的角色白名单，不把未知角色转换成空快照：
+WP10 的真实玩家验收采用显式、可审计的官方 19 角色能力表，不把未知状态转换成空快照：
 
-- 当前只接入官方 `wilson` 和 `wathgrithr`；两者之外的真实角色继续返回不支持并停留在大厅。
-- `wilson` 通过官方 `beard:OnSave/OnLoad` 保存胡须资源；本轮 Profile 的外观策略为 `PRESERVE`，清理阶段不清零外观。
-- `wathgrithr` 通过官方 `singinginspiration:OnSave/OnLoad` 保存灵感值；存在活动歌曲或非零 `battleborn` 时，因为外部效果/临时值尚未有完整清理契约，直接拒绝进入。
-- 角色存在非空 `leader.followers`、虚拟 `itemfollowers`、`petleash.pets` 或已召唤的 `ghostlybond.ghost` 时直接拒绝；不序列化实体引用，也不猜测如何重建关系。
-- TestMode 的合成诊断 Profile 仍保留完整统一规格；真实玩家本轮只使用已经由 live adapters 支持的安全子集，暂不宣称真实客户端已应用统一临时物品、技能、能力或移动速度。
+- `willow`、`wickerbottom`、`wes`、`wurt`、`wonkey` 使用无角色专属持久状态的静态适配器；`wilson`、`webber` 使用官方 `beard` 适配器。
+- `wolfgang`、`wendy`、`wx78`、`woodie`、`waxwell`、`wathgrithr`、`winona`、`warly`、`wortox`、`wormwood`、`walter`、`wanda` 按官方组件的 `OnSave/OnLoad` 或等价 API 捕获、清理和恢复。
+- 只允许有明确恢复契约的关系实体：Wendy 的处于 Limbo 的 Abigail、Walter 的安全 Woby；活动宠物、变身、模块/无人机、运输、小游戏、年龄伤害等无法安全拆分的瞬时状态直接拒绝进入。
+- TestMode 的合成诊断和真实玩家都使用公平规格；真实玩家仍必须先通过 live-safe Capture/Clean/Restore 安全门。真实参与者进入场地后，生命/饥饿统一为 `150/150`、理智为 `200/200`、温度为 `25`、潮湿为 `0`，移动速度采用 Wilson 的 `4/6` 基线；角色外观保留，但角色专属标签、被动倍率、特殊回调、专属组件入口和 SkillTree 激活/经验/选择入口在场内禁用。退出时先撤销运行时公平覆盖，再恢复进入前快照；这条规则不等同于已完成 19 个角色的真实客户端逐一验收。
 
 该范围是安全的增量接线，而不是关闭 Character Adapter 安全门。新增角色或扩大真实 Profile 前，必须先补齐官方组件的 capture、clean、restore 和逐字段验证证据。
 
@@ -1561,8 +1560,9 @@ agon.cleanup_zone <id>
 
 - 背包、装备、鼠标物品完整恢复；
 - 生命、饥饿、理智等恢复一致；
-- 进入比赛后技能点为零，Mode 临时技能生效；
-- 统一 PlayerProfile 下不同角色只保留允许的外观与能力，未授权角色能力不残留；
+- 进入比赛后技能点、SkillTree 经验和选择均为零；服务端拒绝激活技能、增加经验和修改选择，且不启用角色专属技能；
+- 所有允许进入的角色使用统一的 `150/150` 生命与饥饿、`200/200` 理智、温度 `25`、潮湿 `0` 和 Wilson `4/6` 移动基线；保留角色外观，不保留角色专属标签、被动倍率、特殊回调或专属组件效果；
+- 退出后撤销公平覆盖，原角色资源、三围、技能树、装备和外观按快照恢复；
 - 退出后原技能 XP、选择和效果恢复；
 - 各角色 Adapter 独立验收；
 - capture 或 restore 中断后可幂等继续；

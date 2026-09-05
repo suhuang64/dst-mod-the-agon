@@ -113,12 +113,16 @@ local function CaptureLive(player)
             max = health.maxhealth,
             penalty = health.penalty,
             invincible = health.invincible,
+            disable_penalty = health.disable_penalty,
             saved = ReadSaved(health),
         },
         hunger =
         {
             current = hunger.current,
             max = hunger.max,
+            rate = hunger.hungerrate,
+            kill_rate = hunger.hurtrate,
+            burning = hunger.burning,
             saved = ReadSaved(hunger),
         },
         sanity =
@@ -127,6 +131,12 @@ local function CaptureLive(player)
             max = sanity.max,
             mode = sanity.mode,
             sane = sanity.sane,
+            rate_modifier = sanity.rate_modifier,
+            night_drain_mult = sanity.night_drain_mult,
+            neg_aura_mult = sanity.neg_aura_mult,
+            dapperness = sanity.dapperness,
+            dapperness_mult = sanity.dapperness_mult,
+            no_moisture_penalty = sanity.no_moisture_penalty,
             saved = ReadSaved(sanity),
         },
         temperature =
@@ -147,6 +157,12 @@ local function CaptureLive(player)
         return nil, SurvivalStatsAdapter.ERROR_CODES.SNAPSHOT_INVALID
     end
     return data
+end
+
+local function IsFairProfile(profile)
+    return type(profile) == "table"
+        and type(profile.fair_mode) == "table"
+        and profile.fair_mode.enabled == true
 end
 
 function SurvivalStatsAdapter.Capture(player)
@@ -245,6 +261,65 @@ function SurvivalStatsAdapter.ApplyOverrides(player, context, sandbox)
         return false, SurvivalStatsAdapter.ERROR_CODES.COMPONENT_MISSING
     end
     local base_stats = profile.base_stats or {}
+    if IsFairProfile(profile) then
+        local health = components.health
+        local hunger = components.hunger
+        local sanity = components.sanity
+        local temperature = components.temperature
+        local moisture = components.moisture
+        if health == nil or hunger == nil or sanity == nil
+            or temperature == nil or moisture == nil then
+            return false, SurvivalStatsAdapter.ERROR_CODES.COMPONENT_MISSING
+        end
+        local max_health = IsNumber(base_stats.max_health) and base_stats.max_health or 150
+        local health_value = IsNumber(base_stats.health) and base_stats.health or max_health
+        local max_hunger = IsNumber(base_stats.max_hunger) and base_stats.max_hunger or 150
+        local hunger_value = IsNumber(base_stats.hunger) and base_stats.hunger or max_hunger
+        local max_sanity = IsNumber(base_stats.max_sanity) and base_stats.max_sanity or 200
+        local sanity_value = IsNumber(base_stats.sanity) and base_stats.sanity or max_sanity
+        local temperature_value = IsNumber(base_stats.temperature) and base_stats.temperature or 25
+        local moisture_value = IsNumber(base_stats.moisture) and base_stats.moisture or 0
+        local hunger_rate = IsNumber(base_stats.hunger_rate)
+            and base_stats.hunger_rate
+            or (type(TUNING) == "table" and TUNING.WILSON_HUNGER_RATE or 1)
+        local hunger_kill_rate = IsNumber(base_stats.hunger_kill_rate)
+            and base_stats.hunger_kill_rate
+            or (type(TUNING) == "table"
+                and TUNING.WILSON_HEALTH / TUNING.STARVE_KILL_TIME
+                or 1)
+        local ok = pcall(health.SetMaxHealth, health, max_health)
+        ok = ok and pcall(health.SetPenalty, health, 0)
+        ok = ok and pcall(function() health.penalty = 0 end)
+        ok = ok and pcall(health.SetInvincible, health, false)
+        ok = ok and pcall(health.SetCurrentHealth, health, health_value)
+        ok = ok and pcall(hunger.SetMax, hunger, max_hunger)
+        ok = ok and pcall(hunger.SetRate, hunger, hunger_rate)
+        ok = ok and pcall(hunger.SetKillRate, hunger, hunger_kill_rate)
+        if ok then
+            if hunger.burning == false then
+                ok = pcall(hunger.Resume, hunger)
+            end
+        end
+        ok = ok and pcall(hunger.SetCurrent, hunger, hunger_value, false)
+        ok = ok and pcall(sanity.SetMax, sanity, max_sanity)
+        ok = ok and pcall(function() sanity.penalty = 0 end)
+        ok = ok and pcall(sanity.SetCurrent, sanity, sanity_value)
+        if ok then
+            ok = pcall(function()
+                sanity.sane = true
+                if SANITY_MODE_INSANITY ~= nil then
+                    sanity.mode = SANITY_MODE_INSANITY
+                end
+            end)
+        end
+        ok = ok and pcall(temperature.SetTemperature, temperature, temperature_value)
+        ok = ok and pcall(moisture.SetMoistureLevel, moisture, moisture_value)
+        if not ok then
+            return false, SurvivalStatsAdapter.ERROR_CODES.APPLY_FAILED
+        end
+        context.stats_profile_applied = true
+        return true
+    end
     local ok = true
     if base_stats.health_percent ~= nil and components.health ~= nil then
         ok = pcall(components.health.SetPercent, components.health, base_stats.health_percent, false, "agon_sandbox_profile")
@@ -295,13 +370,60 @@ function SurvivalStatsAdapter.Restore(player, data)
     end
     local ok = true
     if components.health ~= nil then
-        ok = pcall(components.health.SetCurrentHealth, components.health, data.health.current)
+        if data.health.disable_penalty ~= nil then
+            ok = pcall(function()
+                components.health.disable_penalty = data.health.disable_penalty
+            end)
+        end
+        if ok and data.health.max ~= nil then
+            ok = pcall(components.health.SetMaxHealth, components.health, data.health.max)
+        end
+        if ok and data.health.penalty ~= nil then
+            ok = pcall(components.health.SetPenalty, components.health, data.health.penalty)
+        end
+        if ok and data.health.invincible ~= nil then
+            ok = pcall(components.health.SetInvincible, components.health, data.health.invincible)
+        end
+        if ok then
+            ok = pcall(components.health.SetCurrentHealth, components.health, data.health.current)
+        end
     end
     if ok and components.hunger ~= nil then
-        ok = pcall(components.hunger.SetCurrent, components.hunger, data.hunger.current, false)
+        if data.hunger.max ~= nil then
+            ok = pcall(components.hunger.SetMax, components.hunger, data.hunger.max)
+        end
+        if ok and data.hunger.rate ~= nil then
+            ok = pcall(components.hunger.SetRate, components.hunger, data.hunger.rate)
+        end
+        if ok and data.hunger.kill_rate ~= nil then
+            ok = pcall(components.hunger.SetKillRate, components.hunger, data.hunger.kill_rate)
+        end
+        if ok and data.hunger.burning == false then
+            ok = pcall(components.hunger.Pause, components.hunger)
+        elseif ok and data.hunger.burning == true then
+            ok = pcall(components.hunger.Resume, components.hunger)
+        end
+        if ok then
+            ok = pcall(components.hunger.SetCurrent, components.hunger, data.hunger.current, false)
+        end
     end
     if ok and components.sanity ~= nil then
-        ok = pcall(components.sanity.SetPercent, components.sanity, data.sanity.current / data.sanity.max, false)
+        if data.sanity.max ~= nil then
+            ok = pcall(components.sanity.SetMax, components.sanity, data.sanity.max)
+        end
+        if ok then
+            ok = pcall(components.sanity.SetCurrent, components.sanity, data.sanity.current)
+        end
+        if ok then
+            ok = pcall(function()
+                if data.sanity.mode ~= nil then
+                    components.sanity.mode = data.sanity.mode
+                end
+                if data.sanity.sane ~= nil then
+                    components.sanity.sane = data.sanity.sane
+                end
+            end)
+        end
     end
     if ok and components.temperature ~= nil then
         ok = pcall(components.temperature.SetTemperature, components.temperature, data.temperature.current)
@@ -328,10 +450,17 @@ function SurvivalStatsAdapter.ValidateRestore(player, data)
     end
     local equal = components.health ~= nil
         and components.health.currenthealth == data.health.current
+        and (data.health.max == nil or components.health.maxhealth == data.health.max)
+        and (data.health.penalty == nil or components.health.penalty == data.health.penalty)
+        and (data.health.invincible == nil or components.health.invincible == data.health.invincible)
         and components.hunger ~= nil
         and components.hunger.current == data.hunger.current
+        and (data.hunger.max == nil or components.hunger.max == data.hunger.max)
         and components.sanity ~= nil
         and components.sanity.current == data.sanity.current
+        and (data.sanity.max == nil or components.sanity.max == data.sanity.max)
+        and (data.sanity.mode == nil or components.sanity.mode == data.sanity.mode)
+        and (data.sanity.sane == nil or components.sanity.sane == data.sanity.sane)
         and components.temperature ~= nil
         and components.temperature.current == data.temperature.current
         and components.moisture ~= nil

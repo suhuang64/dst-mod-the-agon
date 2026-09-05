@@ -43,9 +43,7 @@ local TEST_PLAYER_PROFILE = PlayerProfile.New(
 local function MakeLivePlayerProfile()
     local profile = PlayerProfile.Copy(TEST_PLAYER_PROFILE)
 
-    -- 真实玩家本轮只验证已接线的角色状态 Capture/Clean/Restore。
-    -- 物品、技能、能力和临时组件仍由各自适配器拒绝未实现的 live mutation，
-    -- 因此不能把合成诊断 profile 原样套到真实玩家上。
+    -- 真实玩家使用独立的公平状态；原角色状态仍由各适配器快照并在离场时恢复。
     profile.starting_items = {}
     profile.skills = {}
     profile.skill_points = nil
@@ -55,6 +53,17 @@ local function MakeLivePlayerProfile()
     profile.allowed_abilities = {}
     profile.disabled_abilities = {}
     profile.temporary_components = {}
+    profile.fair_mode =
+    {
+        enabled = true,
+        disable_character_traits = true,
+        disable_skilltree = true,
+        movement =
+        {
+            walk_speed = 4,
+            run_speed = 6,
+        },
+    }
     profile.metadata =
     {
         schema_version = 1,

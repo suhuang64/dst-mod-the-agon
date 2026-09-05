@@ -1040,10 +1040,10 @@ scripts/agon/modes/test_mode/runtime.lua
 
 ### WP7 当前状态（2026-09-02）
 
-- 状态：PlayerSandbox、PlayerProfile、StateAdapterRegistry 及 Inventory/SurvivalStats/SkillTree/Character adapters 已实现，并已接入 Participant、InstanceManager、Common Services 和 TestMode 诊断；默认 Character adapter 仅绑定官方已知角色，其他角色必须显式注册适配器。
+- 状态：PlayerSandbox、PlayerProfile、StateAdapterRegistry 及 Inventory/SurvivalStats/SkillTree/Character adapters 已实现，并已接入 Participant、InstanceManager、Common Services 和 TestMode 诊断；默认 Character adapter 已显式登记官方 19 个角色及其安全能力边界。
 - 官方专服 `Test/World01` 已通过 `WP7_TEST_PASS`：合成测试玩家的背包/装备/鼠标物品/容器、Stats、技能树、角色资源与外观、统一 Profile、正常恢复、重复恢复、恢复失败后的同 transaction 重试、失败玩家隔离和 Instance 清理均通过。
 - 回归：同一专服的 `WP5_TEST_PASS`、`WP6_TEST_PASS` 和 `ValidateCore=true` 均通过；`c_shutdown()` 完成序列化并正常退出，端口和进程均已清理。
-- 安全边界：真实玩家 live mutation 默认关闭；未完成明确的客户端/服务端握手、角色恢复适配或人工安全开关时拒绝进入。2026-09-04 已在官方 `Test/World01` 用两名真实客户端完成限定范围的 `wilson`/`wathgrithr` Capture、进入沙箱、退出恢复和 Instance 清理；仍尚未覆盖真实客户端 UI/StateGraph/网络可见性、跨 shard、断线后重新绑定玩家对象、完整重启中止时的真实玩家存档恢复和未列入白名单的角色，这些仍需 WP8–WP10/WP9 对应阶段补测。
+- 安全边界：真实玩家 live mutation 默认关闭；未完成明确的客户端/服务端握手、角色恢复适配或人工安全开关时拒绝进入。2026-09-05 已将默认 Character adapter 扩展为官方 19 角色能力表；完整多角色客户端逐字段恢复仍需专门实测，不能由服务端注册表结果替代。
 - 2026-09-04 真实绑定首次触发 `CHARACTER_LIVE_STATE_UNSUPPORTED`：SkillTree 官方握手已 READY，但原默认 Character Adapter 没有合法的 live 角色快照来源，因此按安全门拒绝，未清空玩家状态。根据维护者选择，本轮只实现 `wilson`/`wathgrithr`：分别接入官方 `beard`、`singinginspiration` 的纯数据 `OnSave/OnLoad`，并对活动歌曲、非零 `battleborn`、跟随者/宠物/已召唤实体拒绝进入。
 - TestMode 的真实玩家 Profile 已明确收敛为 live-safe 子集：真实玩家不应用尚未具备 live mutation 契约的初始物品、技能、能力、临时组件和移动速度；合成 WP7 诊断仍使用完整统一 Profile。该调整用于验证真实 Capture/Clean/Restore，不得写成“真实统一能力已通过”。
 - 记录：执行细节、两次测试诊断问题及修正原因见 `docs/base-implementation-logs.md` 的 1.23–1.25；WP1 两条 set-piece angle 错误继续按既有决定延后。
@@ -1274,6 +1274,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 真实双客户端首次绑定时发现 SkillTree 硬门缺少官方握手接线：两个玩家的 `skilltreeupdater`/`skilltree` 存在，但 `save_enabled=false` 且项目握手标志为 false，均被正确拒绝。修复方案固定为监听官方 `ms_skilltreeinitialized` 并核对服务端 `POSTACTIVATEHANDSHAKE.READY`；修复后的真实客户端回归仍需在 `Test/World01` 重新执行。
 - 2026-09-04 修复回归进一步确认两个玩家的官方状态均为 `state=3:ready=true`，但项目标志仍为 false，说明原玩家实体监听未实际接到官方事件。Runtime 已改为官方组件同型的 `TheWorld` + 玩家 source 监听，并增加 `playeractivated` 时序兜底；重启后必须再次观察 `SKILLTREE_HANDSHAKE_COMPLETE`，再继续真实 Instance 绑定。
 - 2026-09-04 真实绑定在 Character Adapter 安全门处拒绝后，已按维护者选择开始实现两角色 live adapter；代码和静态检查完成后，必须先销毁残留 `agon:1:1`，重启 `Test/World01`，重新开启 live test，再按 A=`wilson`、B=`wathgrithr` 分步验证 Capture、进入沙箱、退出恢复和逐字段一致性。当前尚未把该实现计为运行 PASS。
+- 2026-09-05 已将 Character Adapter 从两角色扩展为官方 19 角色能力表；专服重载、19 角色注册表、WP4–WP9、`ValidateCore` 均通过。其余角色的真实客户端 Capture/Restore 仍需按角色逐项实测，高风险活动状态继续由安全门拒绝。
 - 2026-09-04 两角色真实沙箱回归已完成：A=`wilson`、B=`wathgrithr` 均进入 `SANDBOXED`，官方角色快照存在，A/B 的 `RemoveParticipant` 即时恢复均返回成功，Instance 清理后 `ValidateCore=true`、`instances=0`、`zones=10/free=10`、`restores=0`、`backend_pending=0`、`errors=0`。A 的延迟恢复校验失败已证实为回到大厅后的饥饿/理智/温度自然漂移，不是恢复丢失；最终 Debug 显示 live test 开关仍开启，必须先关闭再结束本轮。
 - 2026-09-04 安全收尾完成：管理员关闭 live player test 后得到 `PLAYER_TEST_DISABLED` 和 `PLAYER_TEST_STATUS ... enabled=false eligible=true code=nil`。两角色 Character Adapter 的真实沙箱回归可记为限定范围 PASS，但 WP10 仍不能判定 Base Ready；真实 UI/StateGraph/网络可见性、完整 live Profile mutation、断线重绑定、四阶段重启矩阵和跨 shard 仍待验收。
 
@@ -1319,6 +1320,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 已补测真实 GHOST 行为：A=`KU_q87X36VY` 可在场地安全范围内移动，B=`KU_aUxMQjy7` 不受影响；服务端记录 `GHOST` 策略、复活和清理均正常。当前 ENDLESS 测试世界真实玩家无 `revivablecorpse` 组件，因此 REVIVABLE_CORPSE 仅计合成 WP8 诊断通过。
 - 2026-09-05 已补测空 Instance 的重启矩阵：`PREPARING`、`TRANSITION`、`FINISHING` 分别保存后重启，均按 `ABORT_ON_RESTART` 中止，`aborted_on_load=1`、`instances=0`、10 个 Zone FREE、`ValidateCore=true:nil`、无新增错误；这三项是生命周期持久化边界证据，不替代带真实玩家/Scene 的完整阶段矩阵。跨 shard、真实 Backend transport 和完整故障注入仍未完成。
 - 2026-09-05 已补测带真实 A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 的 `TRANSITION`/`FINISHING` 重启恢复：`agon:1:33` 与 `agon:1:34` 均在官方 `handshake_state=3` 后完成玩家恢复，Instance 按 `ABORT_ON_RESTART` 中止，10 个 Zone 释放，`ValidateCore=true:nil`、无新增错误。该证据补足真实玩家阶段，但不替代第二 shard、真实 Backend transport、生产 UI 和完整故障注入验收。
+- 2026-09-05 已实现 TestMode 真实玩家公平覆盖：19 个登记角色进入场地后统一生命/饥饿 `150/150`、理智 `200/200`、温度 `25`、潮湿 `0` 和 Wilson `4/6` 移动基线，移除角色专属标签并中和已登记的角色组件/回调；SkillTree 激活、经验和选择入口由服务端拒绝。公平覆盖只存在运行时，退出前撤销后再恢复原快照；下一步与维护者进行真实客户端逐角色抽样/切换验证，不能把服务端加载通过当作客户端 Gate。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit

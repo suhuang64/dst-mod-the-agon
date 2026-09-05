@@ -182,7 +182,7 @@ c_announce((function() local ok, code = TheWorld.components.agon_runtime:Destroy
 
 以下项目只有在真实玩家绑定成功后才可执行。没有正式 UI 时，维护者可以使用已经存在的官方游戏操作，但不得用合成玩家替代客户端画面、StateGraph 或网络可见性证据。
 
-本轮真实角色接线范围固定为 A=`wilson`、B=`wathgrithr`。A 通过官方 `beard` 组件保存/恢复角色资源，B 通过官方 `singinginspiration` 保存/恢复灵感值；活动歌曲、非零 `battleborn` 或跟随者/宠物/已召唤实体存在时应得到明确拒绝，不得用空表继续。当前 live TestMode Profile 只验证已支持的 Capture/Clean/Restore 安全子集，不把合成诊断中的临时物品、技能、能力和移动速度当作真实玩家已应用。
+默认 Character Adapter 已登记官方 19 个角色；真实玩家路径已接入逐角色 Capture/Clean/Restore 安全门，并在通过后给所有角色应用可撤销的公平覆盖：生命/饥饿 `150/150`、理智 `200/200`、温度 `25`、潮湿 `0`、移动 `4/6`，角色外观保留，角色专属标签/被动倍率/特殊回调/专属组件效果和 SkillTree 激活、经验、选择入口禁用。活动歌曲、非零 `battleborn`、高风险变身/模块/宠物/运输状态或其他已召唤实体存在时仍应明确拒绝，不得用空表继续。19 个角色的真实客户端逐一切换、场内公平字段和退出恢复仍需按下表实测，不能由服务端注册表结果替代。
 
 1. 客户端 A、B 作为两个 Participant 进入同一个 TestMode，分别修改背包、Stats、技能树、角色资源和外观；销毁 Instance 或断线后重连，逐项确认原始状态恢复，记录恢复前后物品 prefab/count、Stats、技能节点、资源值和角色 prefab。
 2. 客户端 A 进入 Spectator，确认它没有目标 Instance 的 Participant 或 PlayerSandbox transaction；只能看到白名单目标，不能执行 gameplay action；退出后回到 Lobby 的动态安全点。

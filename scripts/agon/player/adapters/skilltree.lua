@@ -60,6 +60,87 @@ local function HasLiveHandshake(player, updater)
         and HasOfficialHandshake(player)
 end
 
+local FAIR_GUARDED_METHODS =
+{
+    "ActivateSkill",
+    "ActivateSkill_Server",
+    "ActivateSkill_Client",
+    "AddSkillXP",
+    "AddSkillXP_Server",
+    "AddSkillXP_Client",
+    "SetPlayerSkillSelection",
+}
+
+local function IsFairProfile(profile)
+    return type(profile) == "table"
+        and type(profile.fair_mode) == "table"
+        and profile.fair_mode.enabled == true
+        and profile.fair_mode.disable_skilltree == true
+end
+
+local function InstallFairGuard(player, context, profile)
+    if not IsFairProfile(profile) then
+        return true
+    end
+    local components = Util.GetComponents(player)
+    local updater = components ~= nil and components.skilltreeupdater or nil
+    if updater == nil then
+        return false
+    end
+    local guard = context.skilltree_fair_guard
+    if guard ~= nil and guard.applied == true then
+        return true
+    end
+    guard = { updater = updater, methods = {}, applied = true }
+    context.skilltree_fair_guard = guard
+    for index = 1, #FAIR_GUARDED_METHODS do
+        local method = FAIR_GUARDED_METHODS[index]
+        if type(updater[method]) == "function" then
+            table.insert(
+                guard.methods,
+                {
+                    name = method,
+                    original = updater[method],
+                }
+            )
+            local ok = pcall(function()
+                updater[method] = function()
+                    return false
+                end
+            end)
+            if not ok then
+                guard.applied = false
+                return false
+            end
+        end
+    end
+    -- 官方 SkillTreeUpdater 至少应有 ActivateSkill 和 SetPlayerSkillSelection；
+    -- 如果接线环境没有任何可拦截入口，宁可拒绝进入也不放过技能树。
+    if #guard.methods == 0 then
+        guard.applied = false
+        return false
+    end
+    return true
+end
+
+local function RemoveFairGuard(context)
+    local guard = context.skilltree_fair_guard
+    if guard == nil then
+        return true
+    end
+    for index = #guard.methods, 1, -1 do
+        local entry = guard.methods[index]
+        local ok = pcall(function()
+            guard.updater[entry.name] = entry.original
+        end)
+        if not ok then
+            return false
+        end
+    end
+    guard.applied = false
+    return true
+end
+
 local function CaptureSynthetic(player)
     local state = Util.GetTestState(player)
     if state == nil then
@@ -223,6 +304,9 @@ function SkillTreeAdapter.ApplyOverrides(player, context, sandbox)
         or profile.skilltree_data ~= nil then
         return false, SkillTreeAdapter.ERROR_CODES.PROFILE_UNSUPPORTED
     end
+    if not InstallFairGuard(player, context, profile) then
+        return false, SkillTreeAdapter.ERROR_CODES.APPLY_FAILED
+    end
     context.skilltree_profile_applied = true
     return true
 end
@@ -233,10 +317,14 @@ function SkillTreeAdapter.RemoveOverrides(player, context)
         return true
     end
     local cleaned, code = SkillTreeAdapter.EnterCleanState(player)
-    if cleaned then
-        context.skilltree_overrides_removed = true
+    if not cleaned then
+        return cleaned, code
     end
-    return cleaned, code
+    if not RemoveFairGuard(context) then
+        return false, SkillTreeAdapter.ERROR_CODES.RESTORE_FAILED
+    end
+    context.skilltree_overrides_removed = true
+    return true
 end
 
 function SkillTreeAdapter.Restore(player, data)
