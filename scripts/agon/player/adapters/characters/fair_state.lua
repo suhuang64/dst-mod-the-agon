@@ -2,6 +2,7 @@
 -- 这里保存的是运行时引用，不进入事务快照；退出时必须完整撤销所有覆盖。
 
 local Util = require("agon/player/adapters/util")
+local TechTree = require("techtree")
 
 local FairState = {}
 
