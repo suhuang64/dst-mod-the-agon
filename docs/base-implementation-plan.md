@@ -1293,6 +1293,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 管理员客户端重新开启 live player test，服务端返回 `PLAYER_TEST_ENABLED`；当前开始新的 B-only Instance 测试，仍按 Attach → Start → A 观战 → 硬隔离/跟随验收顺序执行。
 - 2026-09-05 A=`KU_UR8pbyho` 已进入 B=`KU_aUxMQjy7` 所在的 `agon:1:2` FOLLOW 观战；服务端确认 `participant=false`、硬隔离 guard 生效、目标排除标签全为 true，初始 A/B Transform `delta=0,0`。官方 Physics 无 `IsActive()` 读接口，不能以诊断字段 nil 判定碰撞状态；下一步进行真实 B 移动后的 FOLLOW 验收。
 - 2026-09-05 Spectator 最终销毁发现 `SceneService.Reset` 未清理 entity registry 之外的非玩家残留，`meat`、`turf_cave`、`yellowamulet` 和 `backpack` 导致 `SCENE_RESET_FAILED`。已将“拒绝活玩家占用 → 移除非玩家残留 → 再次确认 Zone 为空”的安全流程抽取并复用于正常 Reset 与 RecoverSnapshot；需重新加载后重新执行 Spectator 完整销毁验收。
+- 2026-09-05 维护者反馈 Spectator 仍可通过鼠标左键拖拽物品绕过右键装备拦截，把物品放入装备栏并触发魔光/懒人护符等效果。后续必须补齐服务端装备、卸下、拖拽转移、丢弃、拾取、使用和制作拒绝，并在客户端隐藏/禁用物品栏、装备栏、鼠标携带物品和制作栏；即使物品已进入装备栏，所有主动/被动效果也必须无效，退出观战时恢复原状态。当前仅记录需求，尚未实施。
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。

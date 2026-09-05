@@ -2226,3 +2226,205 @@ docs(base): 修正执行日志文件名
 
 - `scene_service.lua` 已确认由正常 `Reset` 和 `RecoverSnapshot` 共用 `RemoveNonPlayerOccupants`；修改后的 `git diff --check` 通过，仅有仓库原有的 LF/CRLF 提示。
 - 当前运行中的服务尚未加载本次修改；不能在旧进程中重复销毁。下一步重启官方 `klei/DoNotStarveTogether/Test/World01`，启动完成后先回传 `CORE_READY`/恢复基线，再重新执行 Spectator 创建到清理的回归。
+
+### 3.56 2026-09-05：修复加载后旧失败 Instance 进入受控重试状态
+
+- 维护者重启服务并执行只读基线；服务端确认 `agon:1:2` 仍为 `lifecycle=DESTROYING`、`zone_state=QUARANTINED`、`entities=0`，恢复队列与 Backend 队列均为 0。
+- `ValidateCore=false:INSTANCE_INVARIANT_FAILED` 仅反映旧失败 Instance 尚未完成最终销毁；这不是新的场景占用错误。修复已加载，且前一步占用诊断确认残留均为非玩家实体。
+- 下一步执行同一 Instance 的受控 `DestroyInstance` 重试；成功后再核验 `instances=0`、`zones=10/free=10`、恢复队列为空和 `ValidateCore=true`。
+
+### 3.57 2026-09-05：非玩家残留修复后的受控销毁重试仍失败
+
+- 维护者在修复加载后的服务进程执行受控 `DestroyInstance("agon:1:2", "wp10_spectator_cleanup_retry_after_fix")`；服务端公告 `WP10_SPECTATOR_CLEANUP_RETRY:false:SCENE_RESET_FAILED`。
+- 该结果说明普通销毁仍在 `SceneService.Reset` 内部失败，不能再把失败归因于已确认的 5 个非玩家实体，也不能继续盲目重试。
+- 下一步只读读取 Reset 前置条件和底层 Zone validation 返回码，区分残留占用、地形事务、SceneService context 或 Root Scope 收口问题。
+
+### 3.58 2026-09-05：更正服务重载时间，前次重试未加载修复
+
+- 维护者说明 `00:48:29` 基线和 `00:49:58` 销毁重试发生在旧服务进程中，之前并未真正重启加载 `scene_service.lua` 的清理修复。
+- 因此 `WP10_SPECTATOR_CLEANUP_RETRY:false:SCENE_RESET_FAILED` 不能作为修复后的回归失败证据；此前 3.56、3.57 中关于“修复已加载后重试”的判断作废。
+- 下一步等待维护者真正重启 `Test/World01`；重启完成后先确认新的 `boot_generation`/`CORE_READY`，再执行受控清理验证。
+
+### 3.59 2026-09-05：修复加载后的真实重启恢复基线通过
+
+- 维护者真正重启 `Test/World01`；服务端输出新的 `STARTED boot_generation=1`、`RECOVERY_COMPLETE aborted_instance_count=1 pending_restore_count=0 quarantined_zone_count=0` 和 `CORE_READY`。
+- 当前 `instance_count=0`、`zone_count=10`、`free_zone_count=10`，旧失败 Instance 已在重启恢复阶段安全中止并清场，未留下隔离 Zone 或待恢复事务。
+- 下一步执行 `ValidateCore`、Instance/Zone/Recovery 只读基线命令；通过后重新创建 Spectator 测试 Instance，最终验证普通销毁会清理非玩家残留并释放 Zone。
+
+### 3.62 2026-09-05：修复后清理基线只读核验通过
+
+- 维护者执行修复后的基线诊断；服务端公告 `WP10_RESET_FIX_BASE:true:nil:schema=1 shard=1 boot=9 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=0 backend_pending=0 errors=2 live_player_test=off test_context=eligible`。
+- 详细 Debug 确认 10 个 Zone 均为 `FREE owner=nil`，`pending_restore_count=0`、`backend_pending=0`；`errors=2` 为历史错误记录，当前核心有效性已通过。
+- 下一步重新开启 live player test，创建新的 Spectator Instance，按旧流程重新验证并重点确认销毁时非玩家残留会被清理。
+
+### 3.63 2026-09-05：重新开启 Spectator 真实玩家测试开关
+
+- 维护者在管理员客户端执行 `agon.test.player_sandbox on`；服务端公告 `PLAYER_TEST_ENABLED shard_id=1 userid=KU_aUxMQjy7 operation=live_player_test_on`。
+- live player test 已开启，仅对后续新建的 `TEST_MODE` Instance 生效；下一步创建 B-only 测试 Instance。
+
+### 3.64 2026-09-05：修复后新的 B-only Instance 创建成功
+
+- 维护者创建 B=`KU_aUxMQjy7` 的新 `TEST_MODE` Instance；服务端公告 `WP10_INSTANCE_CREATE:agon:1:3:zone=small_01`。
+- `agon:1:3` 已取得 `small_01`，当前尚未绑定或启动；下一步绑定 B 并核验其状态。
+
+### 3.65 2026-09-05：修复后 B 成功绑定新 Instance
+
+- 维护者执行 B=`KU_aUxMQjy7` 的 `AttachPlayer`；服务端公告 `WP10_ATTACH_B:true:nil`。
+- B 已成功绑定到 `agon:1:3`；当前尚未启动，下一步只读核验 Participant、Sandbox、玩家引用和 Lobby 状态。
+
+### 3.66 2026-09-05：修复后 B-only Attach 状态核验通过
+
+- 维护者执行只读绑定诊断；服务端公告 `WP10_ATTACH_B_DIAG:participant=true:state=READY:player_ref=true:tx=agon:1:3:sandbox:1:lobby=false:prefab=wathgrithr`。
+- B 的 Participant、Sandbox 事务、在线玩家引用和 Lobby 隔离均符合预期；下一步启动 `agon:1:3` 并核对场景出生位置。
+
+### 3.67 2026-09-05：修复后 B-only Instance 启动成功
+
+- 维护者执行 `StartInstance("agon:1:3", "wp10_start_b_only")`；服务端公告 `WP10_START_B:true:nil`。
+- B-only Instance 已进入启动后的场景核验阶段；下一步确认 Instance 为 `RUNNING`、B 已脱离 Lobby 并位于 ScenePlan participant spawn tile。
+
+### 3.68 2026-09-05：修复后 B-only 场景出生与大厅隔离核验通过
+
+- 维护者执行只读 Start 诊断；服务端公告 `WP10_START_B_DIAG:instance=RUNNING:state=READY:lobby=false:tile=42,265:expected=42,265:pos=-632,260`。
+- B 已正确进入运行中的 `agon:1:3`，真实位置与 ScenePlan 出生 Tile 一致，并已脱离 Lobby；下一步让 A=`KU_UR8pbyho` 进入 Spectator FOLLOW。
+
+### 3.69 2026-09-05：A 不在当前世界，Spectator 进入请求被安全拒绝
+
+- 维护者执行 A=`KU_UR8pbyho` 进入 `agon:1:3` 的请求；服务端公告 `WP10_SPECTATOR_ENTER:FAIL:PLAYER_NOT_FOUND`。
+- 当前 A 不在本 shard 的 `AllPlayers` 中，服务端正确拒绝请求；B 的运行中 Instance 未受影响。下一步让 A 重新加入当前世界并完成 SkillTree 握手，再重试进入 Spectator。
+
+### 3.70 2026-09-05：更新 Spectator 测试 A 玩家身份
+
+- 维护者将本轮 A 从 `KU_UR8pbyho` 更换为 `KU_ZomQEodk`，B 继续使用 `KU_aUxMQjy7`。
+- 后续 Spectator 进入、硬隔离、物品效果和清理诊断均使用新的 A userid；需先确认新 A 已加入当前世界并完成 SkillTree 握手。
+
+### 3.71 2026-09-05：新 A 已在场，继续 Spectator 进入测试
+
+- 维护者确认 A=`KU_ZomQEodk` 已经加入当前世界；B=`KU_aUxMQjy7` 仍在运行中的 `agon:1:3`。
+- 下一步直接请求 A 进入 `agon:1:3` 的 Spectator FOLLOW 会话，并继续本轮硬隔离回归。
+
+### 3.72 2026-09-05：新 A 成功进入 Spectator FOLLOW
+
+- 维护者让 A=`KU_ZomQEodk` 进入 B=`KU_aUxMQjy7` 所在的 `agon:1:3`；服务端公告 `WP10_SPECTATOR_ENTER:state=SPECTATING:instance=agon:1:3:target=KU_aUxMQjy7:echo=agon:echo:1:anchor=1`。
+- Spectator 会话和唯一 Echo 已创建；下一步只读检查新 A 的 Participant 排除、Lobby 返回会话、硬隔离 guard、控制器和 A/B 实时位置同步。
+
+### 3.73 2026-09-05：新 A 的 Spectator 硬隔离基线通过
+
+- 维护者执行新 A 的只读状态诊断；服务端公告 `WP10_SPECTATOR_STATE_DIAG:state=SPECTATING:instance=agon:1:3:target=KU_aUxMQjy7:participant=false:lobby=true:guard=HARD_NONINTERACTIVE_FOLLOW:guard_applied=true:controller_net=false:pos_a=-632,260:pos_b=-632,260:delta=0,0:tags=true/true/true/true/true/true/true/true`。
+- 新 A 的 Spectator 状态、Participant 排除、硬隔离 guard、控制器禁用、Lobby 返回会话、8 个保护标签和初始 FOLLOW 坐标均符合预期。
+- 下一步补做新 A 的底层隐藏状态、控制器 accessor 和 Physics 接口确认，再进行客户端行为观察；已反馈的物品栏/制作栏漏洞暂不在本轮修复。
+
+### 3.74 2026-09-05：新 A 的两个底层状态 accessor 查询抛出异常
+
+- 维护者执行底层状态诊断；服务端公告 `WP10_GUARD_ACCESSOR_DIAG:hide_method=true:visible_accessor=true:visible=error:enable_method=true:controller_accessor=true:controller=error:controller_net=error:physics_setactive=true:filter=true`。
+- Hide、Enable、Physics.SetActive 和 ActionFilter 接口均存在且 guard/filter 已应用；`IsVisible` 与 controller classified accessor 的查询发生异常，当前不能把 `error` 当作隐藏或控制器状态失败。
+- 下一步只读输出两个 accessor 的具体异常文本，并结合真实客户端观察完成可见性/相机/不可操作确认。
+
+### 3.75 2026-09-05：新 A 的隐藏与控制器 accessor 查询确认通过
+
+- 维护者执行具体 accessor 查询；服务端公告 `WP10_GUARD_ACCESSOR_ERROR:visible_accessor=true:visible=false:visible_error=nil:controller_accessor=true:controller=false:controller_error=nil:guard_applied=true`。
+- 新 A 的真实隐藏状态为 `visible=false`，控制器状态为 `false`，guard 已应用；上一条的 `error` 已确认只是诊断调用方式问题，不是运行时状态异常。
+- 下一步进行新 A 的客户端可见性、相机旋转/缩放、移动/攻击/交互输入观察；已反馈的物品栏/制作栏漏洞暂不在本轮修复。
+
+### 3.76 2026-09-05：新 A 的移动输入未改变 FOLLOW 位置
+
+- 维护者执行移动输入后的位置诊断；服务端公告 `WP10_MOVE_INPUT_DIAG:state=SPECTATING:controller=nil:pos_a=-628.02941894531,265.78622436523:pos_b=-628.02941894531,265.78622436523:delta=0,0`。
+- A 与 B 的真实 Transform 完全一致，A 的移动输入未使其脱离 FOLLOW；本条 `controller=nil` 不覆盖上一条 `controller=false` 的具体 accessor 结果。
+- 下一步让 B 实际移动后再次核对 A/B 坐标，并确认 A 的官方相机随 A 的位置自然更新。
+
+### 3.77 2026-09-05：新 A 的实际 FOLLOW 同步通过，等待客户端画面确认
+
+- 维护者让 B 移动后执行位置诊断；服务端公告 `WP10_FOLLOW_MOVE_DIAG:state=SPECTATING:pos_a=-629.98883056641,263.3395690918:pos_b=-629.98883056641,263.3395690918:delta=0,0`。
+- B 移动后的 A/B 真实 Transform 仍完全一致，服务端实时 FOLLOW 通过；客户端画面是否随 A 的官方相机自然更新仍需维护者确认。
+- 下一步确认 A 的实际画面跟随结果，再继续新 A 的 Health、Combat 和交互硬隔离测试。
+
+### 3.60 2026-09-05：记录 Spectator 物品栏/制作栏绕过漏洞
+
+- 维护者反馈：Spectator A 右击物品栏物品时不能装备，但仍可用鼠标左键将物品拖入装备栏；装备魔光护符会产生发光效果，装备懒人护符会恢复拾取能力。
+- 当前漏洞说明右键装备入口的拦截不等于完整物品隔离；鼠标拖拽/装备栏路径仍可能改变 Spectator 的物品和 gameplay 状态。
+- 维护者要求后续按鬼魂式交互限制处理：隐藏并禁用物品栏、装备栏、鼠标携带物品和制作栏，同时由服务端统一拒绝装备、卸下、拖拽转移、丢弃、拾取、使用和制作；本条只记录需求，暂不实施。
+
+### 3.61 2026-09-05：补充已装备物品效果必须失效
+
+- 维护者进一步明确：即使物品已经通过旧状态、竞态或绕过路径进入 Spectator 的装备栏，也必须完全无效，不能产生魔光、拾取、攻击、防御、光环或其他主动/被动 gameplay 效果。
+- 后续实现必须同时覆盖装备操作拒绝和已装备物品效果抑制；退出 Spectator 后按进入前状态恢复，不能通过删除玩家物品或改写持久化快照规避问题。
+
+### 3.78 2026-09-05：新 A 的客户端 FOLLOW 与硬隔离表现确认通过
+
+- 维护者确认 A=`KU_ZomQEodk` 的真实客户端表现符合预期：A 隐身，官方相机可旋转/缩放，B 移动时画面随 A 的同步位置自然更新。
+- A 不能自行移动、攻击或执行交互；结合前置服务端诊断，客户端 FOLLOW 画面和服务端硬隔离验收通过。
+- 下一步执行新 A 的 Health 普通伤害入口测试；物品栏/制作栏及已装备物品效果漏洞仍按维护者要求暂不实施修复。
+
+### 3.79 2026-09-05：准备执行新 A 的 Health 普通伤害入口测试
+
+- 当前真实测试对象为 A=`KU_ZomQEodk`、B=`KU_aUxMQjy7`、Instance=`agon:1:3`；FOLLOW 与客户端硬隔离验收已通过。
+- 下一条单行控制台命令直接调用 A 的 Health `DoDelta(-25, ...)`，预期 `after` 等于 `before`、`delta=0`、`invincible=true`、`ghost=false`；本步骤只测试普通伤害，不会改变 A 的生命或鬼魂状态。
+
+### 3.80 2026-09-05：新 A 的 Health 普通伤害硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的 Health `DoDelta(-25, ...)` 诊断；服务端公告 `WP10_HEALTH_GUARD_DIAG:before=150:after=150:delta=0:call_result=0:invincible=true:ghost=false`。
+- 直接普通伤害调用未改变生命值，A 仍保持无敌且不是鬼魂；新 A 的普通 Health 伤害入口通过。
+- 下一步测试 Health 的 `ForceKill()` 死亡入口，确认绕过无敌参数的强制死亡也不能改变 A 状态。
+
+### 3.81 2026-09-05：新 A 的 Health ForceKill 死亡入口硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的 Health `ForceKill()` 诊断；服务端公告 `WP10_FORCEKILL_GUARD_DIAG:before=150:after=150:delta=0:call_result=nil:ghost=false`。
+- 强制死亡调用未改变生命值，A 未进入鬼魂状态；新 A 的 Health 死亡入口通过。
+- 下一步测试 Combat 的 `CanBeAttacked()` 与 `GetAttacked()` 入口。
+
+### 3.82 2026-09-05：新 A 的 Combat 受击入口硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的 Combat 受击诊断；服务端公告 `WP10_COMBAT_GUARD_DIAG:can_be_attacked=false:get_attacked=false:before=150:after=150:delta=0:ghost=false`。
+- A 不可被判定为可攻击目标，直接 `GetAttacked` 调用被拦截，生命值和鬼魂状态均未改变；新 A 的 Combat 受击入口通过。
+- 下一步测试 A 的攻击与选目标入口，确认观战实体不会主动攻击或锁定目标。
+
+### 3.83 2026-09-05：新 A 的 Combat 主动攻击与选目标入口硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的 Combat 主动行为诊断；服务端公告 `WP10_COMBAT_OUTBOUND_GUARD_DIAG:set_target=nil:do_attack=nil:try_attack=false:force_attack=false:start_attack=nil:target_before=nil:target_after=nil`。
+- `SetTarget`、`DoAttack`、`StartAttack` 未建立目标或产生攻击；`TryAttack` 与 `ForceAttack` 均返回 `false`，A 的目标前后均为空；新 A 的 Combat 主动入口通过。
+- 下一步测试 PlayerActionPicker 交互过滤，确认观战实体不会执行普通玩家动作。
+
+### 3.84 2026-09-05：新 A 的 PlayerActionPicker 交互过滤通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的 PlayerActionPicker 诊断；服务端公告 `WP10_ACTION_GUARD_DIAG:filter_active=true:walk_actions=0`。
+- 观战动作过滤器处于活动状态，模拟的普通 `WALKTO` 动作被完全过滤；新 A 不会通过 PlayerActionPicker 执行普通玩家交互。
+- 维护者要求后续由助手在 VS Code 终端代输控制台命令；当前电脑控制规范禁止通过 UI 自动操作 Windows/VS Code 终端，且本轮没有可调用的电脑控制接口，因此控制台命令仍需以单行形式交由维护者执行。下一步测试交易、进食和 Debuff 三类直接交互组件入口。
+
+### 3.85 2026-09-05：新 A 的交易、进食与 Debuff 交互入口硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的交易、进食和 Debuff 组件诊断；服务端公告 `WP10_INTERACTION_GUARD_DIAG:able_to_accept=false:wants_to_accept=false:accept_gift=false:can_eat=false:eat=false:add_debuff=false`。
+- 交易接受、进食判断/执行和 Debuff 添加均被硬隔离拦截；新 A 不会通过这些组件参与交互。
+- 下一步测试溺水、燃烧、冻结和雷击等环境伤害入口。
+
+### 3.86 2026-09-05：准备执行新 A 的环境伤害入口测试
+
+- 当前真实测试对象为 A=`KU_ZomQEodk`、B=`KU_aUxMQjy7`、Instance=`agon:1:3`；Health、Combat、PlayerActionPicker、交易、进食和 Debuff 入口均已通过硬隔离验证。
+- 下一条单行控制台命令将调用 A 的 `DoFireDamage`、`TakeDrowningDamage`、`Ignite`、`AddColdness`、`Freeze` 和 `DoStrike`，预期所有环境入口均被拦截，Health `delta=0` 且 `ghost=false`。
+
+### 3.87 2026-09-05：新 A 的环境伤害入口硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的环境伤害诊断；服务端公告 `WP10_ENV_GUARD_DIAG:fire=0:drown=false:ignite=nil:cold=nil:freeze=nil:lightning=nil:health_delta=0:ghost=false`。
+- 火焰伤害返回 `0`，溺水、点火、寒冷、冻结和雷击入口均被拦截；A 的生命值和鬼魂状态未改变，新 A 的环境伤害入口通过。
+- 下一步测试 Hunger、Sanity、Temperature 和 Moisture 的状态变更入口。
+
+### 3.88 2026-09-05：新 A 的 Hunger、Sanity、Temperature、Moisture 状态入口硬隔离通过
+
+- 维护者执行 A=`KU_ZomQEodk` 的持续状态变更诊断；服务端公告 `WP10_STATUS_GUARD_DIAG:hunger=nil:sanity=nil:temperature=nil:moisture=nil:hunger_delta=0:sanity_delta=0:temperature_delta=0:moisture_delta=0`。
+- 四类状态变更调用均未改变对应数值；新 A 的持续生存状态入口通过。
+- 下一步清理当前 `agon:1:3`，验证 Spectator、Participant、Echo、Zone 和场景资源完整释放。
+
+### 3.89 2026-09-05：新 A 的 Spectator Instance 清理成功
+
+- 维护者执行 `DestroyInstance("agon:1:3", "wp10_spectator_cleanup_after_fix")`；服务端公告 `WP10_SPECTATOR_CLEANUP:true:INSTANCE_DESTROYED`。
+- 当前 Spectator、Participant、Echo、Zone 及场景资源清理调用成功；下一步执行最终 Runtime、Instance、Zone 和 Recovery 状态核验。
+
+### 3.90 2026-09-05：新 A 的 Spectator 测试最终 Runtime 核验通过
+
+- 维护者执行最终 Runtime、Instance、Zone 和 Recovery 诊断；服务端公告 `WP10_SPECTATOR_FINAL:true:nil:schema=1 shard=1 boot=9 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=0 backend_pending=0 errors=2 live_player_test=on test_context=eligible`。
+- `ValidateCore=true`；活动 Instance 为 `0`，10 个 Zone 全部 `FREE`，恢复队列 pending 为 `0`，Backend pending 为 `0`；本轮 Spectator 的 FOLLOW、隐藏、无碰撞、不可操作、目标/伤害/交互隔离和销毁清理均完成服务端实测。
+- `errors=2` 为运行时累计历史诊断错误计数，已知来源是此前记录的 `PERSISTENCE_NON_SERIALIZABLE:PERSISTENCE_INVALID_NUMBER`，本次最终诊断未新增错误；临时 `live_player_test` 仍为 `on`，下一步关闭并确认其状态。
+
+### 3.91 2026-09-05：新 A 的 Spectator 验收收口完成
+
+- 维护者执行 `SetLivePlayerTestEnabled(false)` 并读取状态；服务端公告 `WP10_SPECTATOR_TEST_OFF:true:PLAYER_TEST_DISABLED:enabled=false:eligible=true`。
+- 临时 live player test 开关已关闭；本轮新 A=`KU_ZomQEodk`、B=`KU_aUxMQjy7` 的 Spectator FOLLOW、隐藏、无碰撞、不可移动/攻击/交互、怪物目标排除、Health/Combat/环境/持续状态硬隔离、Instance 清理和最终 Runtime 核验均通过。
+- 物品栏/装备栏/制作栏绕过漏洞及已装备物品效果抑制仍只保留为后续实现项，尚未修改；下一步需维护者明确开始该漏洞的代码实现后再进入源码改动。
