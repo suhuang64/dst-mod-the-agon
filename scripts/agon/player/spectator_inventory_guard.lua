@@ -103,6 +103,19 @@ end
 -- 组件级 hook 只安装一次；它们会一直调用官方原方法，只有当相关 owner
 -- 处于 Spectator guard 时才返回阻断值。
 local installed_component_methods = setmetatable({}, { __mode = "k" })
+local stable_method_baselines = setmetatable({}, { __mode = "k" })
+
+local function CaptureStableMethods(component, method_names)
+    if not IsTable(component) then
+        return CaptureMethods(component, method_names)
+    end
+    local baseline = stable_method_baselines[component]
+    if baseline == nil then
+        baseline = CaptureMethods(component, method_names)
+        stable_method_baselines[component] = baseline
+    end
+    return baseline
+end
 
 local function InstallComponentMethod(component, name, blocked_result, predicate)
     if not IsTable(component) then
@@ -593,10 +606,10 @@ local function IsSpectatorInventory(self)
 end
 
 local function InstallPlayerInventoryMethods(state, inventory)
-    state.methods = CaptureMethods(inventory, state.method_names)
+    state.methods = CaptureStableMethods(inventory, state.method_names)
     for index = 1, #state.method_names do
         local name = state.method_names[index]
-        local original = inventory[name]
+        local original = state.methods.original[name]
         if type(original) == "function" then
             rawset(inventory, name, function(self, ...)
                 if IsSpectatorInventory(self) then
@@ -607,7 +620,7 @@ local function InstallPlayerInventoryMethods(state, inventory)
         end
     end
 
-    local original_on_save = inventory.OnSave
+    local original_on_save = state.methods.original.OnSave
     if type(original_on_save) == "function"
         and state.save_captured then
         rawset(inventory, "OnSave", function(self, ...)
@@ -620,10 +633,10 @@ local function InstallPlayerInventoryMethods(state, inventory)
 end
 
 local function InstallPlayerBuilderMethods(state, builder)
-    state.builder_methods = CaptureMethods(builder, BUILDER_METHODS)
+    state.builder_methods = CaptureStableMethods(builder, BUILDER_METHODS)
     for index = 1, #BUILDER_METHODS do
         local name = BUILDER_METHODS[index]
-        local original = builder[name]
+        local original = state.builder_methods.original[name]
         if type(original) == "function" then
             rawset(builder, name, function(self, ...)
                 if self ~= nil and IsSpectator(self.inst) then
@@ -692,7 +705,10 @@ function Guard.Capture(player)
         state.save_references = save_references
     end
     if state.builder ~= nil then
-        state.builder_methods = CaptureMethods(state.builder, BUILDER_METHODS)
+        state.builder_methods = CaptureStableMethods(
+            state.builder,
+            BUILDER_METHODS
+        )
     end
     return state
 end
@@ -789,9 +805,8 @@ local function RemoveUnexpectedEquippedItems(player, state, inventory)
                 or false
             player._agon_spectator_guard_cleanup = cleanup_before
             if not removed or inventory.equipslots[slot] ~= nil then
-                -- Official Unequip may refuse a bypassed item. Never clear the
-                -- slot by hand: doing so would orphan the item. Equippable's
-                -- spectator hooks keep its gameplay effects neutral instead.
+                -- 官方 Unequip 可能拒绝处理被绕过的物品，不能手工清空槽位，
+                -- 以免留下孤立物品；Equippable 的观战 hook 会继续中和效果。
                 success = false
             end
         end
@@ -832,8 +847,8 @@ function Guard.Maintain(player, state)
             player._agon_spectator_guard_cleanup = cleanup_before
             clean = ok and clean
         else
-            -- Do not orphan a carried item when the official setter is absent.
-            -- Inventory entry points remain blocked while the guard is active.
+            -- 官方 setter 不存在时不手工清空 active item，避免留下孤立物品；
+            -- guard 生效期间 Inventory 入口仍保持阻断。
             clean = false
         end
     end

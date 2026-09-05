@@ -2482,3 +2482,23 @@ docs(base): 修正执行日志文件名
 - 单行控制台回归结果：`WP10_PATCH_WP4:true:nil`、`WP10_PATCH_WP5:true:nil`、`WP10_PATCH_WP6:true:nil`、`WP10_PATCH_WP7:true:nil`、`WP10_PATCH_WP8:true:nil`、`WP10_PATCH_WP9:true:nil`；WP8 已不再报告 `spectator entry modified original player state`。
 - 最终单行 Runtime 核验返回 `WP10_PATCH_FINAL:true:nil`；活动 Instance 为 `0`、10 个 Zone 全部 FREE、`ValidateCore=true`、`errors=0`。WP9 诊断按设计留下 `pending_restore_count=2` 和 `backend_pending_count=4` 的内存诊断记录，但未留下活动 Instance 或占用 Zone。
 - 当前服务端已就绪，下一步必须使用真实客户端验证 Spectator 的物品栏/装备栏/制作栏隐藏、鼠标拖拽装备、已装备魔光护符/懒人护符效果抑制、拾取/使用/制作拒绝及退出后的原物品恢复；这些交互不能由 synthetic 诊断代替。
+
+### 3.100 2026-09-05：真实双客户端 Spectator 物品隔离测试已接线
+
+- 两名真实玩家重新加入后确认：A=`KU_0vPtVpg3`（Wilson）、B=`KU_aUxMQjy7`（Wathgrithr）。已开启临时 live player test，并创建 `agon:1:23`、绑定 B 后启动 Instance。
+- 初次把 A、B 都绑定为 Participant 时，直接执行 `EnterSpectator(A, "agon:1:23")` 按设计返回 `SPECTATOR_PARTICIPANT_FORBIDDEN`；随后移除 A 的 Participant 绑定，B 保留在实例内，A 成功进入 Spectator，并通过 `SetTarget(A, B)` 建立跟随目标。
+- 服务端单行基线诊断返回 `state=SPECTATING`、`target=KU_aUxMQjy7`、`A_spectator=true`、`A_guard=true`、`inventory_open=false`、`inventory_visible=false`、`slots=0`、`equips=0`，且 `A_pos=-608,260` 与 `B_pos=-608,260` 一致。
+- 服务端接线和 guard 基线通过；背包/装备栏/制作栏真实 UI 是否隐藏，以及客户端鼠标拖拽、装备、拾取、使用和制作路径仍待维护者在 A 客户端确认，暂不标记为 PASS。
+
+### 3.101 2026-09-05：真实装备夹具暴露 Inventory 包装未恢复问题
+
+- 退出一次空背包观战后，为 A 放入真实 `yellowamulet`（装备槽 `body`）和 `orangeamulet`（普通槽 `2`），两件物品均确认归属 A；再次执行观战进入返回 `SPECTATOR_PLAYER_GUARD_FAILED`。
+- 直接调用 `SpectatorInventoryGuard.Capture/Apply` 重现为 `apply=false:INVENTORY_CLEAN_FAILED`；诊断显示 A 在非观战状态下仍能正常读到物品，但 `debug.getinfo` 表明 `GetItemInSlot`、`Unequip`、`GiveItem` 和 `OnSave` 仍指向 `spectator_inventory_guard.lua` 的旧包装。
+- 根因是连续 guard 生命周期中按当前组件方法捕获/恢复会让旧包装残留并可能再次套包装；进入观战后旧包装隐藏普通槽位，却阻断装备槽清理，造成真实物品无法安全清空。
+- 已新增按组件弱引用保存的官方方法基线：Inventory/Builder 首次接线后始终基于同一官方原方法创建 wrapper，恢复时回写该基线，避免跨次观战恢复旧 wrapper 或嵌套 wrapper；未改动物品删除/存档快照语义。需重启加载后复测真实装备夹具。
+
+### 3.102 2026-09-05：Inventory 包装基线修复已重启加载
+
+- 已销毁失败测试实例并安全停服；关闭时保存用户和世界均完成，进程退出码为 `0`。
+- 已用当前源码重新启动 `Test/World01`；服务器输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`，无本 Mod Lua 加载错误；两条已知 set-piece angle 报错仍暂不处理。
+- 重启后的在线玩家查询暂为空；服务器收到旧客户端的未完成握手并按官方流程关闭，未把半连接状态当作有效玩家。待两名客户端完成重新加入后，复测带 `yellowamulet`/`orangeamulet` 真实物品的 Spectator 进入、退出恢复和服务端硬隔离。
