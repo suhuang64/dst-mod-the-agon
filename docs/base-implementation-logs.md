@@ -2511,3 +2511,9 @@ docs(base): 修正执行日志文件名
 - 失败后 A 已回到普通玩家状态，但诊断仍看到 `slots=1=yellowamulet|2=orangeamulet|4=orangeamulet`、`equips=body=yellowamulet|beard=beard_sack_1`，且 `GetItemInSlot`/`Unequip` 指向当前 `spectator_inventory_guard.lua` wrapper；说明此前 wrapper 残留问题尚未彻底解决，不能把真实装备重入标记为通过。
 - 已进一步修正 `Guard.Capture`：在调用 `InventoryAdapter.Capture` 之前建立并恢复 Inventory/Builder 的稳定方法基线，捕获官方 `OnSave`，并在清理前显式剥离旧 wrapper；`Apply` 也先恢复该基线再执行 live clean。注释保持中文，未删除物品或改写存档快照。
 - 失败 Instance 已通过 `DestroyInstance("agon:1:24", "wp10_inventory_guard_patch_cleanup")` 安全销毁，live player test 已关闭；旧服务器进程的控制台输入未能结束进程，因用户已授权重启而按精确 PID 停止后重新启动。新进程输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，但当前在线查询只发现 A=`KU_0vPtVpg3`，B 尚未出现在 `AllPlayers`，需 B 重新连接后继续实测。
+
+### 3.104 2026-09-05：改为持久组件包装后重新启动，等待客户端回连
+
+- 针对真实装备重入仍残留旧 Inventory wrapper 的问题，继续调整 `spectator_inventory_guard.lua`：Inventory、Builder 和 `OnSave` 包装改为按组件持久存在；Spectator 且非内部清理时返回阻断结果，普通玩家或带 `_agon_spectator_guard_cleanup` 标记的内部恢复路径调用官方方法基线。由此避免反复捕获/恢复方法造成的旧 wrapper 套嵌，同时保留官方清理/恢复调用，不删除物品、不置空失败清理引用、不改写玩家持久化快照。
+- 已移除本次生命周期中的 `RestoreMethods` 调用，保留组件级包装的统一判断；补丁写入后用精确 dedicated-server PID 停止旧进程并重新启动 `Test/World01`。新进程输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`、10 个 Zone 全部 FREE，已知两条 set-piece angle 错误仍按既有决定暂不处理。
+- 重启后的单行 `WP10_PATCH2_PLAYERS` 查询暂时为空；服务器当前无在线玩家，因此尚未执行真实 `yellowamulet`/`orangeamulet` 装备重入、硬隔离、客户端 UI 或退出恢复验收。待 A/B 客户端重新进入后继续。启动重启动作及等待结果已记录，不能把新补丁标记为真实验收通过。

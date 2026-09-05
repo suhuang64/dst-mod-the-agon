@@ -1309,6 +1309,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。
+- 2026-09-05 已将 Inventory、Builder、`OnSave` 改为持久组件级包装，并以 cleanup 标记放行内部官方清理/恢复；已重新启动新代码服务器，`CORE_READY` 正常。当前 `AllPlayers` 查询为空，必须等待 A/B 客户端回连后，才能继续真实装备重入和客户端验收，暂不能标记 WP10 物品隔离通过。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit

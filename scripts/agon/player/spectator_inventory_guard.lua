@@ -54,8 +54,19 @@ local function GetGrandOwner(inst)
     return inventoryitem.owner
 end
 
+-- 进入观战后物品会暂时脱离 Inventory，不能只依赖 inventoryitem.owner；
+-- 用弱引用记录本次快照的运行时物品，既能覆盖脱离后的效果读取，也不会
+-- 把玩家对象或临时标记写入物品存档。
+local spectator_guard_item_owners = setmetatable({}, { __mode = "k" })
+
+local function IsGuardTrackedItem(inst)
+    return IsTable(inst)
+        and IsSpectator(spectator_guard_item_owners[inst])
+end
+
 local function IsOwnedBySpectator(inst)
     return IsSpectator(inst) or IsSpectator(GetGrandOwner(inst))
+        or IsGuardTrackedItem(inst)
 end
 
 local function IsGuardCleanupOwner(owner)
@@ -115,6 +126,70 @@ local function CaptureStableMethods(component, method_names)
         stable_method_baselines[component] = baseline
     end
     return baseline
+end
+
+local function RegisterDescriptorItems(descriptor, player)
+    if not IsTable(descriptor) then
+        return
+    end
+    local item = descriptor.runtime_ref
+    if IsTable(item) then
+        spectator_guard_item_owners[item] = player
+    end
+    if IsTable(descriptor.contents) then
+        for _, nested in pairs(descriptor.contents) do
+            RegisterDescriptorItems(nested, player)
+        end
+    end
+end
+
+local function RegisterGuardItems(data, player)
+    if not IsTable(data) then
+        return
+    end
+    if IsTable(data.slots) then
+        for _, descriptor in pairs(data.slots) do
+            RegisterDescriptorItems(descriptor, player)
+        end
+    end
+    if IsTable(data.equipment) then
+        for _, descriptor in pairs(data.equipment) do
+            RegisterDescriptorItems(descriptor, player)
+        end
+    end
+    RegisterDescriptorItems(data.active_item, player)
+end
+
+local function UnregisterDescriptorItems(descriptor, player)
+    if not IsTable(descriptor) then
+        return
+    end
+    local item = descriptor.runtime_ref
+    if IsTable(item) and spectator_guard_item_owners[item] == player then
+        spectator_guard_item_owners[item] = nil
+    end
+    if IsTable(descriptor.contents) then
+        for _, nested in pairs(descriptor.contents) do
+            UnregisterDescriptorItems(nested, player)
+        end
+    end
+end
+
+local function UnregisterGuardItems(data, player)
+    if not IsTable(data) then
+        return
+    end
+    if IsTable(data.slots) then
+        for _, descriptor in pairs(data.slots) do
+            UnregisterDescriptorItems(descriptor, player)
+        end
+    end
+    if IsTable(data.equipment) then
+        for _, descriptor in pairs(data.equipment) do
+            UnregisterDescriptorItems(descriptor, player)
+        end
+    end
+    UnregisterDescriptorItems(data.active_item, player)
 end
 
 local function InstallComponentMethod(component, name, blocked_result, predicate)
@@ -728,6 +803,7 @@ function Guard.Apply(player, state)
         return true
     end
     state.applied = true
+    RegisterGuardItems(state.data, player)
 
     local cleaned, clean_code = true, nil
     if not state.synthetic then
@@ -790,6 +866,9 @@ function Guard.Restore(player, state)
         ok, code = RestoreLiveInventory(player, state)
     end
     state.restored = ok == true
+    if state.restored then
+        UnregisterGuardItems(state.data, player)
+    end
     return ok, code
 end
 
