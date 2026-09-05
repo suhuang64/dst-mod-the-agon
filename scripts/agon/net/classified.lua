@@ -14,6 +14,7 @@ Classified.NETWORK_FIELDS =
     STATE_PAYLOAD = "state_payload",
     SPECTATOR_STATE = "spectator_state",
     SPECTATOR_ACTIVE = "spectator_active",
+    FAIR_MODE = "fair_mode",
 }
 
 local function Encode(value)
@@ -78,6 +79,11 @@ function Classified.Configure(inst)
         "agon_player_classified.spectator_active",
         "agon_spectator_dirty"
     )
+    inst.agon_fair_mode = net_bool(
+        inst.GUID,
+        "agon_player_classified.fair_mode",
+        "agon_fair_mode_dirty"
+    )
     return true
 end
 
@@ -97,6 +103,22 @@ function Classified.SetParticipant(inst, participant, instance)
     )
     inst.agon_participant_state:set(participant.state or "")
     inst.agon_generation:set(participant.generation or 0)
+    if inst.agon_fair_mode ~= nil then
+        local fair_mode = false
+        local mode_runtime = instance ~= nil and instance.mode_runtime or nil
+        if mode_runtime ~= nil and type(mode_runtime.GetPlayerProfile) == "function" then
+            local ok, profile = pcall(
+                mode_runtime.GetPlayerProfile,
+                mode_runtime,
+                participant
+            )
+            fair_mode = ok
+                and type(profile) == "table"
+                and type(profile.fair_mode) == "table"
+                and profile.fair_mode.enabled == true
+        end
+        inst.agon_fair_mode:set(fair_mode)
+    end
     return true
 end
 
@@ -108,6 +130,9 @@ function Classified.ClearParticipant(inst)
     inst.agon_mode_id:set("")
     inst.agon_participant_state:set("")
     inst.agon_generation:set(0)
+    if inst.agon_fair_mode ~= nil then
+        inst.agon_fair_mode:set(false)
+    end
     if inst.agon_spectator_active ~= nil then
         inst.agon_spectator_active:set(false)
     end
@@ -163,6 +188,7 @@ function Classified.GetClientState(inst)
         state_payload = ReadNetValue(inst.agon_state_payload, ""),
         spectator_state = ReadNetValue(inst.agon_spectator_state, ""),
         spectator_active = ReadNetValue(inst.agon_spectator_active, false),
+        fair_mode = ReadNetValue(inst.agon_fair_mode, false),
     }
 end
 

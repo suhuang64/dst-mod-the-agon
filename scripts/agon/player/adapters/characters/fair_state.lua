@@ -69,6 +69,17 @@ local function Call(object, method, ...)
     return ok
 end
 
+local function SetNetValue(object, field, value)
+    if object == nil then
+        return true
+    end
+    local netvar = object[field]
+    if netvar == nil or type(netvar.set) ~= "function" then
+        return true
+    end
+    return pcall(netvar.set, netvar, value)
+end
+
 local function SaveField(state, object, field)
     if object == nil then
         return true
@@ -599,6 +610,175 @@ local function NormalizeStoryteller(state, storyteller)
     return true
 end
 
+local function NormalizeSingingInspiration(player, state, inspiration)
+    if inspiration == nil then
+        return true
+    end
+
+    if not SetField(state, inspiration, "current", 0)
+        or not SetField(state, inspiration, "active_songs", {})
+        or not SetField(state, inspiration, "available_slots", 0)
+        or not SetField(state, inspiration, "is_draining", false)
+        or not SetField(state, inspiration, "last_attack_time", nil)
+        or not SetField(state, inspiration, "display_fx_count", nil)
+        or not SetField(state, inspiration, "validvictimfn", nil) then
+        return false
+    end
+
+    local classified = player ~= nil and player.player_classified or nil
+    if not SetNetValue(classified, "currentinspiration", 0)
+        or not SetNetValue(classified, "inspirationdraining", false)
+        or not SetNetValue(classified, "hasinspirationbuff", false) then
+        return false
+    end
+    if classified ~= nil and type(classified.inspirationsongs) == "table" then
+        for index = 1, #classified.inspirationsongs do
+            if not SetNetValue(classified.inspirationsongs, index, 0) then
+                return false
+            end
+        end
+    end
+
+    if not AddWrapper(state, player, "GetInspiration", function()
+        return 0
+    end)
+        or not AddWrapper(state, player, "GetInspirationSong", function()
+            return nil
+        end)
+        or not AddWrapper(state, player, "CalcAvailableSlotsForInspiration", function()
+            return 0
+        end)
+        or not AddWrapper(state, inspiration, "SetCalcAvailableSlotsForInspirationFn", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "SetMaxInspiration", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "SetInspiration", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "SetPercent", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "GetMaxInspiration", function()
+            return 0
+        end)
+        or not AddWrapper(state, inspiration, "GetPercent", function()
+            return 0
+        end)
+        or not AddWrapper(state, inspiration, "GetDetachRadius", function()
+            return 0
+        end)
+        or not AddWrapper(state, inspiration, "IsSongActive", function()
+            return false
+        end)
+        or not AddWrapper(state, inspiration, "GetActiveSong", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "IsSinging", function()
+            return false
+        end)
+        or not AddWrapper(state, inspiration, "OnAttacked", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "OnHitOther", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "OnRidingTick", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "DoDelta", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "CanAddSong", function()
+            return false
+        end)
+        or not AddWrapper(state, inspiration, "DisplayFx", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "OnAddInstantSong", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "AddSong", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "PopSong", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "FindFriendlyTargetsToInspire", function()
+            return {}
+        end)
+        or not AddWrapper(state, inspiration, "InstantInspire", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "Inspire", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "SetValidVictimFn", function()
+            return nil
+        end)
+        or not AddWrapper(state, inspiration, "OnUpdate", function()
+            return nil
+        end) then
+        return false
+    end
+    return true
+end
+
+local function NormalizeBattleborn(state, battleborn)
+    if battleborn == nil then
+        return true
+    end
+    if not SetField(state, battleborn, "battleborn", 0)
+        or not SetField(state, battleborn, "battleborn_time", 0)
+        or not SetField(state, battleborn, "battleborn_bonus", 0)
+        or not SetField(state, battleborn, "health_enabled", false)
+        or not SetField(state, battleborn, "sanity_enabled", false)
+        or not SetField(state, battleborn, "ontriggerfn", nil)
+        or not SetField(state, battleborn, "validvictimfn", nil) then
+        return false
+    end
+    if not AddWrapper(state, battleborn, "SetTriggerThreshold", function()
+        return nil
+    end)
+        or not AddWrapper(state, battleborn, "SetDecayTime", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetStoreTime", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetOnTriggerFn", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetBattlebornBonus", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetSanityEnabled", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetHealthEnabled", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetClampMin", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetClampMax", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "SetValidVictimFn", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "OnAttack", function()
+            return nil
+        end)
+        or not AddWrapper(state, battleborn, "OnDeath", function()
+            return nil
+        end) then
+        return false
+    end
+    return true
+end
+
 local function NormalizeWandaState(player, state, components)
     if not SetField(state, player, "age_state", "normal")
         or not SetField(state, player, "overrideskinmode", nil)
@@ -636,7 +816,9 @@ local function NormalizeRoleComponents(player, state, components)
         or not NormalizeFoodMemory(state, components.foodmemory)
         or not NormalizeSoulEater(state, components.souleater)
         or not NormalizeGhostlyBond(state, components.ghostlybond)
-        or not NormalizeStoryteller(state, components.storyteller) then
+        or not NormalizeStoryteller(state, components.storyteller)
+        or not NormalizeSingingInspiration(player, state, components.singinginspiration)
+        or not NormalizeBattleborn(state, components.battleborn) then
         return false
     end
     if components.oldager ~= nil and components.positionalwarp ~= nil then

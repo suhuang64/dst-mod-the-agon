@@ -1321,6 +1321,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 已补测空 Instance 的重启矩阵：`PREPARING`、`TRANSITION`、`FINISHING` 分别保存后重启，均按 `ABORT_ON_RESTART` 中止，`aborted_on_load=1`、`instances=0`、10 个 Zone FREE、`ValidateCore=true:nil`、无新增错误；这三项是生命周期持久化边界证据，不替代带真实玩家/Scene 的完整阶段矩阵。跨 shard、真实 Backend transport 和完整故障注入仍未完成。
 - 2026-09-05 已补测带真实 A=`KU_q87X36VY`、B=`KU_aUxMQjy7` 的 `TRANSITION`/`FINISHING` 重启恢复：`agon:1:33` 与 `agon:1:34` 均在官方 `handshake_state=3` 后完成玩家恢复，Instance 按 `ABORT_ON_RESTART` 中止，10 个 Zone 释放，`ValidateCore=true:nil`、无新增错误。该证据补足真实玩家阶段，但不替代第二 shard、真实 Backend transport、生产 UI 和完整故障注入验收。
 - 2026-09-05 已实现 TestMode 真实玩家公平覆盖：19 个登记角色进入场地后统一生命/饥饿 `150/150`、理智 `200/200`、温度 `25`、潮湿 `0` 和 Wilson `4/6` 移动基线，移除角色专属标签并中和已登记的角色组件/回调；SkillTree 激活、经验和选择入口由服务端拒绝。公平覆盖只存在运行时，退出前撤销后再恢复原快照；下一步与维护者进行真实客户端逐角色抽样/切换验证，不能把服务端加载通过当作客户端 Gate。
+- 2026-09-05 首轮真实绑定曾因公平 Builder 逻辑读取未声明全局 `TechTree` 返回 `INVALID_PLAYER_STATE_ADAPTER`；已改为显式 `require("techtree")`，失败 Instance 已清理，修复后专服重新加载到 `CORE_READY`。待 A/B 重新加入后继续真实公平、死亡复活、掉线重连和离场恢复验收。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit

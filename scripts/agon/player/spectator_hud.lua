@@ -18,6 +18,22 @@ local function IsLocalSpectator(player)
     return ok and active == true
 end
 
+local function IsLocalFairPlayer(player)
+    if player == nil or player ~= ThePlayer then
+        return false
+    end
+    local classified = player.agon_player_classified
+    if classified == nil or classified.agon_fair_mode == nil
+        or type(classified.agon_fair_mode.value) ~= "function" then
+        return false
+    end
+    local ok, active = pcall(
+        classified.agon_fair_mode.value,
+        classified.agon_fair_mode
+    )
+    return ok and active == true
+end
+
 local function ProtectedCall(callback, ...)
     if type(callback) ~= "function" then
         return false
@@ -135,6 +151,62 @@ local function RestoreInventoryBar(self)
     end
 end
 
+local FAIR_ROLE_STATUS_FIELDS =
+{
+    "inspirationbadge",
+    "mightybadge",
+    "wereness",
+    "avengingghostbadge",
+    "pethealthbadge",
+    "pethungerbadge",
+}
+
+local function HideFairRoleStatus(self)
+    local controls = self ~= nil and self.controls or nil
+    local status = controls ~= nil and controls.status or nil
+    if status == nil then
+        return
+    end
+    self._agon_fair_role_status_visibility = self._agon_fair_role_status_visibility or {}
+    for index = 1, #FAIR_ROLE_STATUS_FIELDS do
+        local field = FAIR_ROLE_STATUS_FIELDS[index]
+        local widget = status[field]
+        if widget ~= nil then
+            if self._agon_fair_role_status_visibility[field] == nil then
+                local ok, visible = ProtectedCall(widget.IsVisible, widget)
+                self._agon_fair_role_status_visibility[field] = ok and visible == true
+            end
+            if type(widget.Hide) == "function" then
+                ProtectedCall(widget.Hide, widget)
+            end
+        end
+    end
+end
+
+local function RestoreFairRoleStatus(self)
+    local controls = self ~= nil and self.controls or nil
+    local status = controls ~= nil and controls.status or nil
+    local saved = self ~= nil and self._agon_fair_role_status_visibility or nil
+    if status == nil or saved == nil then
+        return
+    end
+    local ghost = status.isghostmode == true
+    for index = 1, #FAIR_ROLE_STATUS_FIELDS do
+        local field = FAIR_ROLE_STATUS_FIELDS[index]
+        local widget = status[field]
+        if widget ~= nil then
+            if saved[field] == true and not ghost then
+                if type(widget.Show) == "function" then
+                    ProtectedCall(widget.Show, widget)
+                end
+            elseif type(widget.Hide) == "function" then
+                ProtectedCall(widget.Hide, widget)
+            end
+        end
+    end
+    self._agon_fair_role_status_visibility = nil
+end
+
 local function IsBlockedControl(control)
     local function InRange(first, last)
         return type(control) == "number"
@@ -160,8 +232,12 @@ function SpectatorHud.Install(hud)
         local original_update = hud.OnUpdate
         hud.OnUpdate = function(self, ...)
             local active = IsLocalSpectator(self.owner)
+            local fair = IsLocalFairPlayer(self.owner)
             if active then
                 HideSpectatorInventory(self)
+            end
+            if fair then
+                HideFairRoleStatus(self)
             end
             local result = original_update(self, ...)
             if active then
@@ -169,7 +245,13 @@ function SpectatorHud.Install(hud)
             elseif self._agon_spectator_hud_was_active then
                 RestoreInventoryBar(self)
             end
+            if fair then
+                HideFairRoleStatus(self)
+            elseif self._agon_fair_hud_was_active then
+                RestoreFairRoleStatus(self)
+            end
             self._agon_spectator_hud_was_active = active
+            self._agon_fair_hud_was_active = fair
             return result
         end
     end
