@@ -2517,3 +2517,31 @@ docs(base): 修正执行日志文件名
 - 针对真实装备重入仍残留旧 Inventory wrapper 的问题，继续调整 `spectator_inventory_guard.lua`：Inventory、Builder 和 `OnSave` 包装改为按组件持久存在；Spectator 且非内部清理时返回阻断结果，普通玩家或带 `_agon_spectator_guard_cleanup` 标记的内部恢复路径调用官方方法基线。由此避免反复捕获/恢复方法造成的旧 wrapper 套嵌，同时保留官方清理/恢复调用，不删除物品、不置空失败清理引用、不改写玩家持久化快照。
 - 已移除本次生命周期中的 `RestoreMethods` 调用，保留组件级包装的统一判断；补丁写入后用精确 dedicated-server PID 停止旧进程并重新启动 `Test/World01`。新进程输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`、10 个 Zone 全部 FREE，已知两条 set-piece angle 错误仍按既有决定暂不处理。
 - 重启后的单行 `WP10_PATCH2_PLAYERS` 查询暂时为空；服务器当前无在线玩家，因此尚未执行真实 `yellowamulet`/`orangeamulet` 装备重入、硬隔离、客户端 UI 或退出恢复验收。待 A/B 客户端重新进入后继续。启动重启动作及等待结果已记录，不能把新补丁标记为真实验收通过。
+
+### 3.105 2026-09-05：发现脱离 Inventory 的装备效果读取缺口并完成修补加载准备
+
+- 新进程中确认 A=`KU_0vPtVpg3` 的真实基线为普通槽位 `yellowamulet`/`orangeamulet`、装备槽 `beard=beard_sack_1`；B=`KU_aUxMQjy7` 作为唯一 Participant 启动 `agon:1:24`，A 成功进入 Spectator，清理后 live 槽位和装备槽均为空，说明持久组件包装已解决此前 `INVENTORY_CLEAN_FAILED` 的真实重入问题。
+- 服务端硬隔离诊断中，Inventory `GiveItem`/`Equip` 均为 `pcall=true` 但业务返回 `nil`，直接 `Equippable:Equip` 返回 `false`；`IsEquipped=false`、`IsInsulated=false`，但 `GetWalkSpeedMult()` 仍返回 `1.2`。核对物品归属发现清理后 `inventoryitem.owner` 不再指向 A，确定缺口是脱离 Inventory 的快照物品无法被效果读取 hook 识别，并非直接装备入口放行。
+- 已在 `spectator_inventory_guard.lua` 增加弱键运行时归属表：进入 Spectator 时登记槽位、装备、active item 及容器嵌套物品的 `runtime_ref`，Equippable 效果读取通过该表继续返回中性值；退出恢复成功后解除登记，不写入物品存档。当前测试随后正常退出、恢复原始 `yellowamulet`/`orangeamulet` 槽位和 `beard_sack_1`，并成功销毁 Instance、关闭 live player test。
+- 已按精确 dedicated-server PID 重启加载该修补；新进程输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`、10 个 Zone 全部 FREE。重启后的单行 `WP10_PATCH2_PLAYERS` 查询再次为空，需 A/B 客户端重新进入后才能验证速度/绝缘/光效/懒人护符副作用抑制、客户端 UI 和最终退出恢复；本条不将物品硬隔离标记为 PASS。
+
+### 3.106 2026-09-05：运行时物品归属弱引用修复后的服务端硬隔离复测通过
+
+- 新进程中 A=`KU_0vPtVpg3`（Wilson）、B=`KU_aUxMQjy7`（Wathgrithr）均完成官方 SkillTree `handshake_state=3`；B-only `agon:1:24` 创建、Attach、Start 成功。A 原始基线仍为普通槽位 `yellowamulet`/`orangeamulet`、装备槽 `beard=beard_sack_1`。
+- A 带真实物品进入 Spectator 后，服务端 `WP10_PATCH3_HARD_GUARD` 返回：Inventory `GiveItem`/`Equip` 的业务值均为 `nil`，直接 `Equippable:Equip` 的业务值为 `false`，`OnPickup` 返回 `true` 阻止拾取；Builder `CanBuild=false`、`MakeRecipe=false`；`IsEquipped=false`、`GetWalkSpeedMult=1`、`IsInsulated=false`、`GetDapperness=0`、湿度返回 `{ moisture=0, max=0 }`。
+- 同一诊断确认 `yellowamuletlight` 附近数量为 `0`、黄护符 `isequipped=false`、橙护符周期 `task=false`，因此已装备护符的光照、拾取和速度/绝缘/心智等效果均未在 Spectator 中生效；这证明弱引用归属表解决了脱离 Inventory 后的效果读取缺口。
+- `WP10_PATCH3_PERSISTENCE_EFFECTS` 返回 `save_same=true:refs_same=true:save_type=table:yellow_light=false:near_light=0:orange_task=false`，观战期间 `Inventory:OnSave()` 使用进入前捕获的官方保存结果和引用，未将临时清空状态写入玩家快照。当前 A 仍处于 Spectator，Instance 暂不销毁，等待客户端确认物品栏/装备栏/制作栏隐藏和不可打开后再执行退出恢复与最终清理。
+
+### 3.107 2026-09-05：Spectator 物品、装备和制作硬隔离最终验收通过
+
+- 维护者确认 A 客户端的物品栏、装备栏和制作栏已隐藏，无法打开或通过客户端路径进行拖拽/装备操作；与服务端硬隔离结果一致。
+- 执行 `ExitSpectator("agon:1:24")` 返回 `WP10_PATCH3_SPECTATOR_EXIT:true:nil`。随后服务端恢复核验返回 `slots=1=yellowamulet|2=orangeamulet`、`equips=beard=beard_sack_1`，三件物品的 `inventoryitem.owner` 均恢复为 A，`spectator=false`；黄护符原本位于普通槽位，因此恢复后 `yellow_isequipped=false`、`light=0`，没有改变原始装备状态。
+- 执行 `DestroyInstance("agon:1:24", "wp10_patch3_final_cleanup")` 返回 `WP10_PATCH3_INSTANCE_CLEANUP:true:INSTANCE_DESTROYED`；关闭 live player test 返回 `WP10_PATCH3_PLAYER_TEST_OFF:true:PLAYER_TEST_DISABLED`。
+- 最终 `ValidateCore`/Instance/Zone/Recovery 诊断返回 `WP10_PATCH3_FINAL:true:nil:schema=1 shard=1 boot=3 layout=READY v=1 core=READY offset=0,0 resolved=200,200 world=0,0 instances=0 zones=10 restores=2 backend_pending=4 errors=0 live_player_test=off test_context=eligible`；Instance 为 `0`、10 个 Zone 全部 FREE、活动恢复 pending 为 `2`（WP9 诊断记录）、Backend pending 为 `4`（未配置 transport 的 WP9 诊断记录），本轮没有遗留活动实例或 Zone 占用，也没有新增错误。
+- 本轮真实双客户端物品隔离链路完成：进入前真实物品捕获、观战期间 Inventory/Builder/Container/InventoryItem/Equippable 服务端拒绝、脱离 Inventory 的护符效果中和、OnSave 不改写、客户端 UI 隐藏、退出后原物品/装备/归属恢复、Instance/Zone 清理均已验证。更大范围的 WP10 Base Release Gate（第二 shard/cross-shard、完整四阶段重启矩阵、真实 Backend transport 等）仍按计划保留为未完成项。
+
+### 3.108 2026-09-05：发现退出观战后建造栏未恢复并完成客户端恢复修补
+
+- 维护者反馈：A 返回大厅后物品栏相关 UI 已恢复，但建造栏没有恢复；服务端物品/装备状态和 Instance 清理不受影响。
+- 对照官方 `scripts/widgets/controls.lua` 确认：Spectator 隐藏流程把 `craftingshown=false`，并对 `craftingmenu` 调用 `Hide()`/`Disable()`；官方 `ShowCraftingAndInventory()` 只有在 `craftingshown=true` 时才调用 `DoShowCrafting_Internal()`。原 `RestoreInventoryBar()` 只恢复 Inventory，没有恢复制作标志、启用制作 widget，导致建造栏保持隐藏。
+- 已修正 `scripts/agon/player/spectator_hud.lua`：退出时先恢复 `craftingshown=true`，调用官方 `ShowCrafting()`/`ShowCraftingAndInventory()`，再显式 `Enable()`/`Show()` `craftingmenu`；保留服务端权限拒绝和观战期间隐藏逻辑。当前补丁尚未在新客户端进程中运行验证，需重启后确认 A 返回大厅时建造栏可见可用。

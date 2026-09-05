@@ -106,6 +106,13 @@ local function RestoreInventoryBar(self)
     if controls == nil then
         return
     end
+    -- HideSpectatorInventory 把 craftingshown 和 craftingmenu 一起禁用；
+    -- 只调用 ShowCraftingAndInventory 不会恢复 craftingshown=false 的分支，
+    -- 因而建造栏会保持隐藏。先恢复官方显示标志，再显式启用制作 widget。
+    controls.craftingshown = true
+    if type(controls.ShowCrafting) == "function" then
+        ProtectedCall(controls.ShowCrafting, controls)
+    end
     if type(controls.ShowCraftingAndInventory) == "function" then
         ProtectedCall(controls.ShowCraftingAndInventory, controls)
     end
@@ -115,6 +122,15 @@ local function RestoreInventoryBar(self)
         end
         if type(controls.inv.Show) == "function" then
             ProtectedCall(controls.inv.Show, controls.inv)
+        end
+    end
+    local crafting = controls.craftingmenu
+    if crafting ~= nil then
+        if type(crafting.Enable) == "function" then
+            ProtectedCall(crafting.Enable, crafting)
+        end
+        if type(crafting.Show) == "function" then
+            ProtectedCall(crafting.Show, crafting)
         end
     end
 end

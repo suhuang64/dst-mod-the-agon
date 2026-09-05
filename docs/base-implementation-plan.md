@@ -1310,6 +1310,10 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。
 - 2026-09-05 已将 Inventory、Builder、`OnSave` 改为持久组件级包装，并以 cleanup 标记放行内部官方清理/恢复；已重新启动新代码服务器，`CORE_READY` 正常。当前 `AllPlayers` 查询为空，必须等待 A/B 客户端回连后，才能继续真实装备重入和客户端验收，暂不能标记 WP10 物品隔离通过。
+- 2026-09-05 真实硬隔离复测确认直接 `Equippable:Equip` 已返回 `false`，但物品清理后 `inventoryitem.owner` 脱离 A，导致 `GetWalkSpeedMult()` 仍返回原值；已增加按快照 `runtime_ref` 登记的弱键物品归属表，恢复成功后解除。补丁已重启加载并通过 `CORE_READY`，当前等待 A/B 回连后复测效果读取、客户端 UI 与退出恢复。
+- 2026-09-05 弱键物品归属修复后的真实服务端复测通过：直接装备/Inventory/制作均被拒绝，效果读取为中性，黄护符光源和橙护符周期任务均未启动，`OnSave` 仍返回进入前捕获的数据与引用。当前仅剩 A 客户端确认物品栏、装备栏、制作栏确实隐藏且不可打开，随后执行退出恢复和最终清理。
+- 2026-09-05 维护者确认 A 客户端物品栏/装备栏/制作栏隐藏且不可打开；退出后 `yellowamulet`/`orangeamulet`/`beard_sack_1` 的原槽位、装备槽和 A 归属恢复，Instance 销毁、10 个 Zone 释放、`ValidateCore=true`、`live_player_test=off`。Spectator 物品硬隔离子项完成真实双客户端验收；WP10 总 Gate 仍保留第二 shard、完整重启矩阵、真实 Backend transport 等集成未完成项。
+- 2026-09-05 维护者补报退出观战后建造栏未恢复；根因是客户端隐藏时将 `craftingshown=false` 并禁用 `craftingmenu`，旧恢复路径只恢复 Inventory。已修正 `spectator_hud.lua` 的退出顺序和制作 widget 的 `Enable/Show`，需重启客户端进行回归，未将建造栏修复标记为通过。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit
