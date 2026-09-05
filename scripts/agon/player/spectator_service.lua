@@ -1,6 +1,7 @@
 -- WP8：Instance-aware 只读观战关系、玩家可逆保护和观战残影。
 
 local LayoutService = require("agon/world/layout_service")
+local SpectatorInventoryGuard = require("agon/player/spectator_inventory_guard")
 
 local SpectatorService = {}
 SpectatorService.SCHEMA_VERSION = 1
@@ -497,6 +498,8 @@ local function CapturePlayerGuard(player)
         freezable_frozen = false,
         previous_guard_mode = player.agon_spectator_guard_mode,
     }
+    guard.inventory_guard, guard.inventory_guard_code =
+        SpectatorInventoryGuard.Capture(player)
     for index = 1, #PROTECTION_TAGS do
         local tag = PROTECTION_TAGS[index]
         guard.had_tags[tag] = HasTag(player, tag)
@@ -843,6 +846,17 @@ local function ApplyPlayerGuard(player, guard)
         target_switch = true,
         free_camera = false,
     }
+    if guard.inventory_guard == nil then
+        guard.inventory_guard_code = guard.inventory_guard_code
+            or SpectatorInventoryGuard.ERROR_CODES.CAPTURE_FAILED
+        return false
+    end
+    local inventory_guard_applied, inventory_guard_code =
+        SpectatorInventoryGuard.Apply(player, guard.inventory_guard)
+    guard.inventory_guard_code = inventory_guard_code
+    if not inventory_guard_applied then
+        return false
+    end
     if not AddProtectionTags(player, guard) then
         return false
     end
@@ -1033,6 +1047,11 @@ local function RestorePlayerGuard(player)
     end
     local restored = true
 
+    local inventory_restored, inventory_restore_code =
+        SpectatorInventoryGuard.Restore(player, guard.inventory_guard)
+    guard.inventory_guard_code = inventory_restore_code
+    restored = inventory_restored and restored
+
     local components = type(player.components) == "table"
         and player.components
         or {}
@@ -1212,6 +1231,11 @@ local function MaintainPlayerGuard(player)
     end
     if type(player.ClearBufferedAction) == "function" then
         ProtectedCall(player.ClearBufferedAction, player)
+    end
+    if not SpectatorInventoryGuard.Maintain(player, guard.inventory_guard) then
+        guard.inventory_guard_code =
+            SpectatorInventoryGuard.ERROR_CODES.RESTORE_FAILED
+        return false
     end
     for index = 1, #PROTECTION_TAGS do
         local tag = PROTECTION_TAGS[index]
@@ -1712,6 +1736,15 @@ function SpectatorService.Validate(self)
             or session.player.is_spectator ~= true
             or session.player.agon_spectator_guard_mode
                 ~= "HARD_NONINTERACTIVE_FOLLOW" then
+            return false, SpectatorService.ERROR_CODES.PLAYER_GUARD_FAILED
+        end
+        local inventory_guard_valid = SpectatorInventoryGuard.Validate(
+            session.player,
+            session.player.agon_spectator_guard ~= nil
+                and session.player.agon_spectator_guard.inventory_guard
+                or nil
+        )
+        if not inventory_guard_valid then
             return false, SpectatorService.ERROR_CODES.PLAYER_GUARD_FAILED
         end
     end

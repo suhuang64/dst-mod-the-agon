@@ -14,6 +14,25 @@ PrefabFiles =
 local AgonRpc = require("agon/net/rpc")
 AgonRpc.Register()
 
+-- WP10：物品、装备、容器和物品拾取的全局组件入口必须在服务端统一拒绝；
+-- hook 本身在普通玩家上透传官方实现，只对 is_spectator 生效。
+local SpectatorInventoryGuard = require("agon/player/spectator_inventory_guard")
+if type(AddComponentPostInit) == "function"
+    and SpectatorInventoryGuard ~= nil then
+    AddComponentPostInit(
+        "inventoryitem",
+        SpectatorInventoryGuard.InstallInventoryItem
+    )
+    AddComponentPostInit(
+        "equippable",
+        SpectatorInventoryGuard.InstallEquippable
+    )
+    AddComponentPostInit(
+        "container",
+        SpectatorInventoryGuard.InstallContainer
+    )
+end
+
 -- WP10：PlayerController 在官方 Enable(false) 状态下会跳过镜头控制；
 -- 观战只替换客户端 DoCameraControl，保留服务端对移动和交互的封锁。
 local SpectatorInput = require("agon/player/spectator_input")
@@ -21,6 +40,15 @@ if type(AddClassPostConstruct) == "function"
     and SpectatorInput ~= nil
     and type(SpectatorInput.Install) == "function" then
     AddClassPostConstruct("components/playercontroller", SpectatorInput.Install)
+end
+
+-- WP10：客户端物品栏/装备栏/鼠标携带物品/制作栏只在本地 Spectator 期间隐藏；
+-- 服务器 guard 仍是最终权限边界，不能依赖 UI 拦截。
+local SpectatorHud = require("agon/player/spectator_hud")
+if type(AddClassPostConstruct) == "function"
+    and SpectatorHud ~= nil
+    and type(SpectatorHud.Install) == "function" then
+    AddClassPostConstruct("screens/playerhud", SpectatorHud.Install)
 end
 
 local function StartAgonServerRuntime(world)
@@ -42,6 +70,29 @@ end
 
 -- world 回调无条件注册，避免通过顶层配置 return 跳过共享/客户端声明区。
 AddPrefabPostInit("world", StartAgonServerRuntime)
+
+-- `AddPrefabPostInit("world", ...)` 负责在存档读写前创建组件；真正依赖 Portal、
+-- 地图尺寸和已完成 world populate 的布局/核心初始化必须放到官方 SimPostInit。
+-- 服务器侧 SimPostInit 会在 TheWorld:PostInit() 前执行，且回调参数在 dedicated
+-- server 上为 nil，因此从 GLOBAL.TheWorld 读取 world。重复调用由 runtime 自身幂等保护。
+if type(AddSimPostInit) == "function" then
+    AddSimPostInit(function()
+        local world = GLOBAL.TheWorld
+        if world == nil or world.ismastersim ~= true
+            or GetModConfigData("enable_agon") ~= true then
+            return
+        end
+        local runtime = world.components ~= nil
+            and world.components.agon_runtime
+            or nil
+        if runtime == nil then
+            runtime = StartAgonServerRuntime(world)
+        end
+        if runtime ~= nil and type(runtime.OnPostInit) == "function" then
+            runtime:OnPostInit()
+        end
+    end)
+end
 
 -- WP4：把自定义 classified 绑定到玩家。没有启用 The Agon 的 shard 不会创建
 -- server runtime，因此这里不会产生任何额外的实体或监听器。

@@ -2428,3 +2428,57 @@ docs(base): 修正执行日志文件名
 - 维护者执行 `SetLivePlayerTestEnabled(false)` 并读取状态；服务端公告 `WP10_SPECTATOR_TEST_OFF:true:PLAYER_TEST_DISABLED:enabled=false:eligible=true`。
 - 临时 live player test 开关已关闭；本轮新 A=`KU_ZomQEodk`、B=`KU_aUxMQjy7` 的 Spectator FOLLOW、隐藏、无碰撞、不可移动/攻击/交互、怪物目标排除、Health/Combat/环境/持续状态硬隔离、Instance 清理和最终 Runtime 核验均通过。
 - 物品栏/装备栏/制作栏绕过漏洞及已装备物品效果抑制仍只保留为后续实现项，尚未修改；下一步需维护者明确开始该漏洞的代码实现后再进入源码改动。
+
+### 3.92 2026-09-05：开始实现 Spectator 物品、装备和制作硬隔离
+
+- 根据维护者已确认的需求，开始把物品栏/装备栏绕过漏洞从“仅记录”推进到代码实现；本条及后续实现、测试和异常均继续追加到本文件，供后续 Agent 接续。
+- 服务端新增 `spectator_inventory_guard.lua`：保存 InventoryAdapter 的运行时物品引用和官方 `Inventory:OnSave()` 返回值；进入 Spectator 时清理 active item、普通槽位和装备槽，退出时恢复原方法、原物品和原显示状态，不通过删除物品或改写玩家持久化快照规避问题。
+- 服务端按 Spectator 状态拒绝 Inventory 的装备/卸下/拖拽转移/丢弃/拾取/使用入口、Builder 的制作入口、Container 的容器转移入口，以及 InventoryItem/Equippable 的直接入口；同时把装备存在时可能产生的护甲、绝缘、速度、防水、湿度、光环标签和物品查询读取收敛为无效果结果，并由周期维护清理意外出现的 active/equipment 状态。
+- 客户端新增 `spectator_hud.lua`：在本地 classified Spectator 期间持续隐藏并禁用 Inventorybar、装备/容器根节点、制作菜单和法术轮，拦截打开物品栏/制作/容器/法术轮及物品热键；服务端 guard 仍是最终权限边界。
+- 已修改 `modmain.lua` 和 `spectator_service.lua` 接入上述 guard，并把 SpectatorService.Validate 纳入物品 guard 校验；静态 `git diff --check` 待完成，Test/World01 真实运行验证待启动后完成。
+
+### 3.93 2026-09-05：修正装备湿度读取的中性返回类型
+
+- 检查到 `Equippable:GetEquippedMoisture()` 的官方返回值是包含 `moisture` 和 `max` 字段的表；Spectator guard 原先返回数字 `0`，在部分官方调用链中可能触发把数字当表访问的错误。
+- 已将 Spectator 的阻断返回改为 `{ moisture = 0, max = 0 }`，保持“无湿度效果”语义并兼容官方调用者；正常玩家仍调用原方法。
+
+### 3.94 2026-09-05：补齐 Runtime 的 SimPostInit 自动初始化接线
+
+- 启动修改后的 `Test/World01` 时，服务器进程保持运行，但日志只出现 `[STARTED]`，没有自动出现 `LAYOUT_READY/CORE_READY`；静态核对发现 `agon_runtime:OnPostInit()` 只有定义，没有任何调用点。
+- 对照官方 `D:\OneDrive\DST\scripts\modutil.lua` 和 `gamelogic.lua`：`AddSimPostInit` 在 `ModManager:SimPostInit(nil)` 阶段执行，随后才调用 `TheWorld:PostInit()`，适合在 world populate 完成后初始化依赖 Portal/Map 的布局和核心。
+- 已在 `modmain.lua` 保留 `AddPrefabPostInit("world", ...)` 以便在存档读写前创建 runtime，并增加服务端 `AddSimPostInit` 调用 `runtime:OnPostInit()`；runtime 内既有 READY/FAILED 状态使重复调用保持幂等。当前服务器仍是旧代码进程，需安全重启后验证自动初始化及物品硬隔离。
+
+### 3.95 2026-09-05：新代码服务器启动与旧失败状态核查
+
+- 已通过 dedicated server 进程启动 `Test/World01`，使用现有 `D:\SteamLibrary\steamapps\common\Don't Starve Together\mods\the-agon` 符号链接指向当前仓库；服务器输出 `LOADING LUA SUCCESS`，未出现本轮代码的 Lua 加载/解析错误。两个官方 set-piece angle 错误仍为此前已知且暂不处理的非本 Mod 报错。
+- 服务器加载的 Runtime 状态为 `runtime=true:layout=FAILED:core=PENDING`，详细状态为 `failure=nil:saved_layout=false`；这是 Test 世界上一次失败快照保留的 `layout_status=FAILED` 标记，当前进程未自动重生成或删除任何存档内容。
+- 只读控制台几何核查确认 `map=400,400:portals=1:portal=0,0`，说明当前世界几何与 WorldLayout 预期一致；一次诊断命令误使用服务端不可见的 `GLOBAL`、另一次使用未声明的 `_` 临时变量，均只产生控制台诊断错误，没有修改世界。
+- 新增的 `AddSimPostInit` 接线已随新进程加载；由于旧失败标记保护了布局初始化，下一步用不写存档的内存级 `PENDING → OnPostInit` 控制台测试推进正式初始化，然后再验证 `CORE_READY` 和 WP10 物品硬隔离。
+
+### 3.96 2026-09-05：避免 Spectator 装备清理失败时遗失物品
+
+- 代码复核发现 `RemoveUnexpectedEquippedItems` 在官方 `Unequip` 失败或装备引用仍存在时直接执行 `inventory.equipslots[slot] = nil`；这会把绕过进入装备栏的物品变成孤立引用，与“不得删除/遗失物品”的需求冲突。
+- 已移除该强制置空逻辑；同样移除 active item 清理失败时的直接 `inventory.activeitem = nil`。官方清理入口失败时保留物品，由组件级 `Equippable` 中性效果和 Inventory 阻断继续保证 Spectator 不可使用，退出时仍可重试恢复。
+- `git diff --check` 无内容错误，仅报告仓库既有的 LF/CRLF 转换提示；当前 dedicated server 已通过单行 `c_shutdown()` 安全退出并完成快照保存。
+- 重新启动并完成 WP10 真实运行验证前被现有 Test 世界的保护性布局失败阻断：内存级重试明确返回 `HALL_TILE_MISMATCH`（检测到 hall tile `203,199`，预期 Portal-relative tile `200,200`）。本轮未执行 `c_regenerateworld()`、未复制 backup、未删除或改写现有存档。
+
+### 3.97 2026-09-05：清理保护修正后的第二次服务器加载自测
+
+- 重新启动 `Test/World01` 最新代码；服务器再次输出 `LOADING LUA SUCCESS`，`the-agon`、`spectator_inventory_guard.lua` 和 `spectator_hud.lua` 均未产生 Lua 加载/解析错误。
+- 单行只读诊断返回 `runtime=true:layout=FAILED:core=PENDING:failure=nil`；这是现有世界保存的失败状态，未自动清除。
+- 单行内存级重试 `layout_status="PENDING" → OnPostInit()` 的返回为 `pcall=true:result=false:layout=FAILED:core=PENDING:failure=HALL_TILE_MISMATCH`，服务端明确检测到 hall tile `203,199` 与预期 `200,200` 不一致；重试本身只修改运行时内存。
+- 随后通过单行 `c_shutdown()` 安全关闭该进程并完成世界快照保存；保存的是当前受保护的失败状态，未执行重生成、复制 backup、删除物品或改写玩家物品快照。由于测试地图仍无效，本轮没有创建 Instance，也没有把未验证的物品/制作/装备行为标记为通过。
+
+### 3.98 2026-09-05：重生成地图后的 WP4–WP9 回归发现 synthetic 原始状态被改写
+
+- 获得维护者授权后在 `Test/World01` 执行单行 `c_regenerateworld()`；世界重新生成成功，服务端输出 `LAYOUT_READY`（Portal-relative `200,200`、`400×400`）、`RECOVERY_COMPLETE` 和 `CORE_READY`，10 个 Zone 全部 FREE。
+- 重生成后的 WP4、WP5、WP6、WP7、WP9 均返回 `true:nil`；WP8 返回 `false:spectator entry modified original player state`。
+- 根因是新物品 guard 对 synthetic player 也调用 `InventoryAdapter.EnterCleanState`，把合成测试玩家的原始 `agon_sandbox_state.inventory` 临时改为空表；这不符合“不改原始快照”的语义。
+- 已修正为 synthetic player 进入 Spectator 时不改底层原始 inventory，只安装阻断包装；退出时同时恢复 inventory 方法。下一步重启加载该修正并重新执行回归。
+
+### 3.99 2026-09-05：synthetic inventory 修正后的服务器回归通过
+
+- 已安全关闭旧代码进程并重启最新代码；启动输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE` 和 `CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`，10 个 Zone 全部 FREE。
+- 单行控制台回归结果：`WP10_PATCH_WP4:true:nil`、`WP10_PATCH_WP5:true:nil`、`WP10_PATCH_WP6:true:nil`、`WP10_PATCH_WP7:true:nil`、`WP10_PATCH_WP8:true:nil`、`WP10_PATCH_WP9:true:nil`；WP8 已不再报告 `spectator entry modified original player state`。
+- 最终单行 Runtime 核验返回 `WP10_PATCH_FINAL:true:nil`；活动 Instance 为 `0`、10 个 Zone 全部 FREE、`ValidateCore=true`、`errors=0`。WP9 诊断按设计留下 `pending_restore_count=2` 和 `backend_pending_count=4` 的内存诊断记录，但未留下活动 Instance 或占用 Zone。
+- 当前服务端已就绪，下一步必须使用真实客户端验证 Spectator 的物品栏/装备栏/制作栏隐藏、鼠标拖拽装备、已装备魔光护符/懒人护符效果抑制、拾取/使用/制作拒绝及退出后的原物品恢复；这些交互不能由 synthetic 诊断代替。

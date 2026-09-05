@@ -1293,7 +1293,13 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 管理员客户端重新开启 live player test，服务端返回 `PLAYER_TEST_ENABLED`；当前开始新的 B-only Instance 测试，仍按 Attach → Start → A 观战 → 硬隔离/跟随验收顺序执行。
 - 2026-09-05 A=`KU_UR8pbyho` 已进入 B=`KU_aUxMQjy7` 所在的 `agon:1:2` FOLLOW 观战；服务端确认 `participant=false`、硬隔离 guard 生效、目标排除标签全为 true，初始 A/B Transform `delta=0,0`。官方 Physics 无 `IsActive()` 读接口，不能以诊断字段 nil 判定碰撞状态；下一步进行真实 B 移动后的 FOLLOW 验收。
 - 2026-09-05 Spectator 最终销毁发现 `SceneService.Reset` 未清理 entity registry 之外的非玩家残留，`meat`、`turf_cave`、`yellowamulet` 和 `backpack` 导致 `SCENE_RESET_FAILED`。已将“拒绝活玩家占用 → 移除非玩家残留 → 再次确认 Zone 为空”的安全流程抽取并复用于正常 Reset 与 RecoverSnapshot；需重新加载后重新执行 Spectator 完整销毁验收。
-- 2026-09-05 维护者反馈 Spectator 仍可通过鼠标左键拖拽物品绕过右键装备拦截，把物品放入装备栏并触发魔光/懒人护符等效果。后续必须补齐服务端装备、卸下、拖拽转移、丢弃、拾取、使用和制作拒绝，并在客户端隐藏/禁用物品栏、装备栏、鼠标携带物品和制作栏；即使物品已进入装备栏，所有主动/被动效果也必须无效，退出观战时恢复原状态。当前仅记录需求，尚未实施。
+- 2026-09-05 维护者反馈 Spectator 仍可通过鼠标左键拖拽物品绕过右键装备拦截，把物品放入装备栏并触发魔光/懒人护符等效果。后续必须补齐服务端装备、卸下、拖拽转移、丢弃、拾取、使用和制作拒绝，并在客户端隐藏/禁用物品栏、装备栏、鼠标携带物品和制作栏；即使物品已进入装备栏，所有主动/被动效果也必须无效，退出观战时恢复原状态。当前已进入实现和验证阶段。
+- 2026-09-05 已加入 Spectator 物品硬隔离：Inventory、Builder、Container、InventoryItem 和 Equippable 的服务端入口按 Spectator 状态拒绝，装备效果读取返回中性值，进入观战清理当前物品并保留运行时引用/官方 OnSave 返回值，退出时恢复；客户端 PlayerHud 强制隐藏/禁用物品栏、装备栏、容器、制作栏和法术轮。真实客户端拖拽、物品效果旁路、保存不改写和退出恢复仍需在可启动的 Test 世界完成验收。
+- 2026-09-05 启动新 Test/World01 时发现只输出 `STARTED` 而没有自动进入 `LAYOUT_READY/CORE_READY`；核对官方 `modutil.lua` 与 `gamelogic.lua` 后确认 `AddSimPostInit` 是在 world populate 完成、`TheWorld:PostInit()` 前执行的合适入口。已保留 `AddPrefabPostInit("world", ...)` 用于早期创建 runtime，并新增服务端 `AddSimPostInit` 调用 `runtime:OnPostInit()`，让布局/核心初始化自动接线且保持幂等。
+- 2026-09-05 代码复核移除装备槽/active item 清理失败时的强制置空，避免物品孤立或遗失；清理失败时依靠中性效果 hook 与服务端入口拒绝保持安全，退出时保留重试恢复路径。当前真实验证被 Test/World01 已保存的 `HALL_TILE_MISMATCH` 阻断，未经维护者授权不得重生成地图或替换存档。
+- 2026-09-05 最新代码第二次启动输出 `LOADING LUA SUCCESS`，但现有 Test/World01 仍为 `layout=FAILED:core=PENDING`；内存级 `OnPostInit` 重试返回 `HALL_TILE_MISMATCH`。已安全停服，等待是否授权在 Test/World01 重生成有效测试地图后继续 WP10 物品/装备/制作真实验收。
+- 2026-09-05 已获授权重生成 Test/World01，`LAYOUT_READY/CORE_READY` 恢复且 WP4/5/6/7/9 回归通过；WP8 暴露 synthetic inventory 被 `EnterCleanState` 临时改写的问题。已改为 synthetic guard 不改底层原始 inventory，并补齐退出时方法恢复。
+- 2026-09-05 重启加载修正后的代码，WP4/5/6/7/8/9 全部返回 `true:nil`，最终 `ValidateCore=true`、Instance=0、10 个 Zone 全部 FREE、`errors=0`；下一步进入真实客户端物品/装备/制作硬隔离验收。
 - 2026-09-04 出生点接线首轮销毁测试暴露 `SCENE_RESET_FAILED`：真实 Participant 已位于 Zone 内，但销毁前没有统一返回 Lobby，导致 `ValidateZoneCleared()` 仍发现玩家占据 Zone；已按设计顺序补充 `Restore → Return to Lobby → Scene Reset`，需重启后复测。
 - 2026-09-04 手动移回 Lobby 后销毁重试仍被第一次失败留下的 `QUARANTINED` Zone 拦截；已补充仅在 Scene Reset/空 Zone validation 完成后，允许同一 owner 受控 `QUARANTINED → RESETTING → FREE` 的 Destroy retry 与 restart recovery 路径，需重启加载并复测。
 - 2026-09-04 重启后发现该失败实例快照已不存在但 `small_01` 仍为匹配 owner 的孤立 `QUARANTINED`；已补充显式孤立 Zone 恢复入口，必须先执行 RecoverSnapshot 风格的实体/Tile 清理和空 Zone validation，不能直接改 FREE。
