@@ -59,13 +59,13 @@
 
 ### 1.3 执行日志规则（强制）
 
-`docs/base-implementation-logs.md` 是本项目跨 Agent 的持续执行日志，采用 append-only 规则。任何实施、调试、验证、修复或文档任务都必须遵循以下顺序：
+`docs/base-implementation-logs.md` 是本项目跨 Agent 的持续执行日志，默认采用 append-only 的精简里程碑记录。任何实施、调试、验证、修复或文档任务都必须遵循以下顺序：
 
 1. 开始前读取日志，并在本次工作记录中明确目标、范围、当前 Git 状态、关键假设、官方源码依据和验证计划。
 2. 执行中记录重要运行事实、错误原文、修复原因、测试环境、端口/进程、存档影响和用户明确延后的事项。
-3. 完成后追加日期、任务/WP、修改文件、验证证据、未验证项、风险、后续行动、Git 状态和建议中文 Conventional Commit。
-4. 只能追加，不能覆盖、删除或把多次任务压缩成无法追溯的结论；若历史结论过期，追加更正记录并保留原记录。
-5. 日志中的运行证据必须标明属于静态检查、服务端、真实客户端还是跨 shard；缺失的验证不得宣称完成。
+3. 完成后追加日期、任务/WP、关键修改、最小验证证据、未验证项、风险、后续行动、Git 状态和建议中文 Conventional Commit。
+4. 默认只能追加；如果维护者明确要求压缩，可删除重复的逐条回显并整理为关键摘要，但不得删除失败根因、修复、最终证据、未验证边界或用户明确的延后决定。压缩后后续仍只追加精简记录。
+5. 日志中的运行证据必须标明属于静态检查、服务端、真实客户端还是跨 shard；缺失的验证不得宣称完成。相同结果的重复轮询和无新结论的中间回显不记录。
 6. 不得写入密码、Token 等秘密；官方 `D:\OneDrive\DST\scripts` 仍然只读，日志规则不构成修改官方源码的授权。
 
 ### 1.4 通用停止条件
@@ -1314,6 +1314,7 @@ feat(recovery): 完成重启中止与幂等恢复结算
 - 2026-09-05 弱键物品归属修复后的真实服务端复测通过：直接装备/Inventory/制作均被拒绝，效果读取为中性，黄护符光源和橙护符周期任务均未启动，`OnSave` 仍返回进入前捕获的数据与引用。当前仅剩 A 客户端确认物品栏、装备栏、制作栏确实隐藏且不可打开，随后执行退出恢复和最终清理。
 - 2026-09-05 维护者确认 A 客户端物品栏/装备栏/制作栏隐藏且不可打开；退出后 `yellowamulet`/`orangeamulet`/`beard_sack_1` 的原槽位、装备槽和 A 归属恢复，Instance 销毁、10 个 Zone 释放、`ValidateCore=true`、`live_player_test=off`。Spectator 物品硬隔离子项完成真实双客户端验收；WP10 总 Gate 仍保留第二 shard、完整重启矩阵、真实 Backend transport 等集成未完成项。
 - 2026-09-05 维护者补报退出观战后建造栏未恢复；根因是客户端隐藏时将 `craftingshown=false` 并禁用 `craftingmenu`，旧恢复路径只恢复 Inventory。已修正 `spectator_hud.lua` 的退出顺序和制作 widget 的 `Enable/Show`，需重启客户端进行回归，未将建造栏修复标记为通过。
+- 2026-09-05 维护者补报观战场地出现不可交互的 A/Wilson 残影；根因是 `CreateEcho()` 把 `agon_spectator_echo` 放到了场地 spectator anchor。已修正为优先使用大厅 `lobby_return_position`，真实双客户端复测确认场地无残影、残影位于大厅，退出观战和 Instance 清理正常。
 - 第二 shard/cross-shard、真实 Backend transport、正式匹配/UI 和完整 live Profile mutation 仍属于未完成的集成或产品范围，不在本轮用 TestMode 结果替代。
 
 ### 建议 Commit

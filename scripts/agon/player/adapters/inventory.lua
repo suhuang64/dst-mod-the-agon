@@ -22,14 +22,32 @@ InventoryAdapter.ERROR_CODES =
 }
 
 local function IsValidObject(value)
-    if value == nil then
+    if type(value) ~= "table" or type(value.IsValid) ~= "function" then
         return false
-    end
-    if type(value.IsValid) ~= "function" then
-        return true
     end
     local ok, valid = pcall(value.IsValid, value)
     return ok and valid == true
+end
+
+local function GetDescriptorPrefab(descriptor)
+    if type(descriptor) ~= "table" then
+        return nil
+    end
+    if type(descriptor.prefab) == "string" and descriptor.prefab ~= "" then
+        return descriptor.prefab
+    end
+    local record = descriptor.save_record
+    if type(record) == "table"
+        and type(record.prefab) == "string"
+        and record.prefab ~= "" then
+        return record.prefab
+    end
+    return nil
+end
+
+local function HasSerializedItemData(descriptor)
+    return GetDescriptorPrefab(descriptor) ~= nil
+        and type(descriptor.save_record) == "table"
 end
 
 local function GetContainer(item)
@@ -90,7 +108,8 @@ local function ValidateItemDescriptor(item, synthetic, seen)
             return false
         end
     else
-        if not IsValidObject(item.runtime_ref)
+        local runtime_valid = IsValidObject(item.runtime_ref)
+        if not runtime_valid and not HasSerializedItemData(item)
             or (item.prefab ~= nil and type(item.prefab) ~= "string") then
             seen[item] = nil
             return false
@@ -280,6 +299,151 @@ local function ClearLiveInventory(player, inventory)
     return true
 end
 
+local function RemoveCreatedItems(created_items)
+    for index = #created_items, 1, -1 do
+        local item = created_items[index]
+        if IsValidObject(item) and type(item.Remove) == "function" then
+            pcall(item.Remove, item)
+        end
+    end
+end
+
+local function SpawnSerializedItem(descriptor, created_items)
+    if type(SpawnPrefab) ~= "function" or not HasSerializedItemData(descriptor) then
+        return nil, InventoryAdapter.ERROR_CODES.RESTORE_ITEM_INVALID
+    end
+
+    local record = descriptor.save_record
+    local ok, item = pcall(
+        SpawnPrefab,
+        GetDescriptorPrefab(descriptor),
+        record.skinname,
+        record.skin_id
+    )
+    if not ok or not IsValidObject(item) then
+        return nil, InventoryAdapter.ERROR_CODES.RESTORE_FAILED
+    end
+    table.insert(created_items, item)
+
+    if record.alt_skin_ids ~= nil then
+        item.alt_skin_ids = record.alt_skin_ids
+    end
+    if record.data ~= nil then
+        if type(item.SetPersistData) ~= "function" then
+            return nil, InventoryAdapter.ERROR_CODES.RESTORE_FAILED
+        end
+        local restored = pcall(item.SetPersistData, item, record.data)
+        if not restored or not IsValidObject(item) then
+            return nil, InventoryAdapter.ERROR_CODES.RESTORE_FAILED
+        end
+    end
+    return item
+end
+
+local function GiveContainerItem(container, item, slot)
+    if container == nil
+        or type(container.GiveItem) ~= "function"
+        or type(container.GetItemInSlot) ~= "function" then
+        return false
+    end
+    local ok = pcall(container.GiveItem, container, item, slot, nil, false)
+    if not ok then
+        return false
+    end
+    local actual_ok, actual = pcall(container.GetItemInSlot, container, slot)
+    return actual_ok and actual == item
+end
+
+local function BuildRestoredItem(descriptor, created_items, resolving, resolved)
+    if type(descriptor) ~= "table" or resolving[descriptor] then
+        return nil, InventoryAdapter.ERROR_CODES.RESTORE_ITEM_INVALID
+    end
+    resolving[descriptor] = true
+
+    local item = descriptor.runtime_ref
+    local spawned = false
+    if not IsValidObject(item) then
+        local spawn_code
+        item, spawn_code = SpawnSerializedItem(descriptor, created_items)
+        if item == nil then
+            resolving[descriptor] = nil
+            return nil, spawn_code
+        end
+        spawned = true
+    end
+
+    if spawned and descriptor.contents ~= nil then
+        local container = GetContainer(item)
+        if container == nil then
+            resolving[descriptor] = nil
+            return nil, InventoryAdapter.ERROR_CODES.RESTORE_FAILED
+        end
+        for slot, child_descriptor in pairs(descriptor.contents) do
+            if child_descriptor ~= nil then
+                local child, child_code = BuildRestoredItem(
+                    child_descriptor,
+                    created_items,
+                    resolving,
+                    resolved
+                )
+                if child == nil or not GiveContainerItem(container, child, slot) then
+                    resolving[descriptor] = nil
+                    return nil, child_code or InventoryAdapter.ERROR_CODES.RESTORE_FAILED
+                end
+            end
+        end
+    end
+
+    resolving[descriptor] = nil
+    if spawned then
+        table.insert(resolved, { descriptor = descriptor, item = item })
+    end
+    return item
+end
+
+local function GiveInventoryItem(inventory, item, slot)
+    if type(inventory.GiveItem) ~= "function"
+        or type(inventory.GetItemInSlot) ~= "function" then
+        return false
+    end
+    local ok = pcall(inventory.GiveItem, inventory, item, slot)
+    if not ok then
+        return false
+    end
+    local actual_ok, actual = pcall(inventory.GetItemInSlot, inventory, slot)
+    return actual_ok and actual == item
+end
+
+local function EquipInventoryItem(inventory, item, equipment_slot)
+    if type(inventory.Equip) ~= "function"
+        or type(inventory.GetEquippedItem) ~= "function" then
+        return false
+    end
+    local ok = pcall(inventory.Equip, inventory, item, nil, true, true)
+    if not ok then
+        return false
+    end
+    local actual_ok, actual = pcall(
+        inventory.GetEquippedItem,
+        inventory,
+        equipment_slot
+    )
+    return actual_ok and actual == item
+end
+
+local function GiveActiveInventoryItem(inventory, item)
+    if type(inventory.GiveActiveItem) ~= "function"
+        or type(inventory.GetActiveItem) ~= "function" then
+        return false
+    end
+    local ok = pcall(inventory.GiveActiveItem, inventory, item)
+    if not ok then
+        return false
+    end
+    local actual_ok, actual = pcall(inventory.GetActiveItem, inventory)
+    return actual_ok and actual == item
+end
+
 function InventoryAdapter.EnterCleanState(player)
     if Util.IsSyntheticPlayer(player) then
         local state = Util.GetTestState(player)
@@ -384,31 +548,91 @@ local function RestoreLive(player, data)
     if inventory == nil then
         return false, InventoryAdapter.ERROR_CODES.COMPONENT_MISSING
     end
-    local cleared, clear_code = ClearLiveInventory(player, inventory)
-    if not cleared then
-        return false, clear_code
+
+    local created_items = {}
+    local resolved = {}
+    local resolving = {}
+    local plan =
+    {
+        slots = {},
+        equipment = {},
+        active_item = nil,
+    }
+    local function Fail(code)
+        RemoveCreatedItems(created_items)
+        return false, code or InventoryAdapter.ERROR_CODES.RESTORE_FAILED
     end
+
     for slot, descriptor in pairs(data.slots or {}) do
         if descriptor ~= nil then
-            if not IsValidObject(descriptor.runtime_ref) then
-                return false, InventoryAdapter.ERROR_CODES.RESTORE_ITEM_INVALID
+            local item, item_code = BuildRestoredItem(
+                descriptor,
+                created_items,
+                resolving,
+                resolved
+            )
+            if item == nil then
+                return Fail(item_code)
             end
-            inventory:GiveItem(descriptor.runtime_ref, slot)
+            plan.slots[slot] = { descriptor = descriptor, item = item }
         end
     end
     for equipment_slot, descriptor in pairs(data.equipment or {}) do
         if descriptor ~= nil then
-            if not IsValidObject(descriptor.runtime_ref) then
-                return false, InventoryAdapter.ERROR_CODES.RESTORE_ITEM_INVALID
+            local item, item_code = BuildRestoredItem(
+                descriptor,
+                created_items,
+                resolving,
+                resolved
+            )
+            if item == nil then
+                return Fail(item_code)
             end
-            inventory:Equip(descriptor.runtime_ref, nil, true, true)
+            plan.equipment[equipment_slot] =
+            {
+                descriptor = descriptor,
+                item = item,
+            }
         end
     end
     if data.active_item ~= nil then
-        if not IsValidObject(data.active_item.runtime_ref) then
-            return false, InventoryAdapter.ERROR_CODES.RESTORE_ITEM_INVALID
+        local item, item_code = BuildRestoredItem(
+            data.active_item,
+            created_items,
+            resolving,
+            resolved
+        )
+        if item == nil then
+            return Fail(item_code)
         end
-        inventory:GiveActiveItem(data.active_item.runtime_ref)
+        plan.active_item = { descriptor = data.active_item, item = item }
+    end
+
+    local cleared, clear_code = ClearLiveInventory(player, inventory)
+    if not cleared then
+        return Fail(clear_code)
+    end
+
+    for slot, entry in pairs(plan.slots) do
+        if not GiveInventoryItem(inventory, entry.item, slot) then
+            return Fail(InventoryAdapter.ERROR_CODES.RESTORE_FAILED)
+        end
+    end
+
+    for equipment_slot, entry in pairs(plan.equipment) do
+        if not EquipInventoryItem(inventory, entry.item, equipment_slot) then
+            return Fail(InventoryAdapter.ERROR_CODES.RESTORE_FAILED)
+        end
+    end
+
+    if plan.active_item ~= nil
+        and not GiveActiveInventoryItem(inventory, plan.active_item.item) then
+        return Fail(InventoryAdapter.ERROR_CODES.RESTORE_FAILED)
+    end
+
+    for index = 1, #resolved do
+        local entry = resolved[index]
+        entry.descriptor.runtime_ref = entry.item
     end
     return true
 end
