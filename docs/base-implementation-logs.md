@@ -2545,3 +2545,9 @@ docs(base): 修正执行日志文件名
 - 维护者反馈：A 返回大厅后物品栏相关 UI 已恢复，但建造栏没有恢复；服务端物品/装备状态和 Instance 清理不受影响。
 - 对照官方 `scripts/widgets/controls.lua` 确认：Spectator 隐藏流程把 `craftingshown=false`，并对 `craftingmenu` 调用 `Hide()`/`Disable()`；官方 `ShowCraftingAndInventory()` 只有在 `craftingshown=true` 时才调用 `DoShowCrafting_Internal()`。原 `RestoreInventoryBar()` 只恢复 Inventory，没有恢复制作标志、启用制作 widget，导致建造栏保持隐藏。
 - 已修正 `scripts/agon/player/spectator_hud.lua`：退出时先恢复 `craftingshown=true`，调用官方 `ShowCrafting()`/`ShowCraftingAndInventory()`，再显式 `Enable()`/`Show()` `craftingmenu`；保留服务端权限拒绝和观战期间隐藏逻辑。当前补丁尚未在新客户端进程中运行验证，需重启后确认 A 返回大厅时建造栏可见可用。
+
+### 3.109 2026-09-05：建造栏恢复补丁已在新服务端加载并完成退出接线，等待客户端确认
+
+- 已按最新 `spectator_hud.lua` 重启 `Test/World01`；服务器输出 `LOADING LUA SUCCESS`、`LAYOUT_READY`、`RECOVERY_COMPLETE`、`CORE_READY`，Portal-relative 布局为 `200,200`、地图为 `400×400`、10 个 Zone 全部 FREE；已知两条 set-piece angle 报错仍按既有决定暂不处理。
+- A=`KU_0vPtVpg3`（Wilson）和 B=`KU_aUxMQjy7`（Wathgrithr）均重新加入并完成 SkillTree 握手。已开启 live player test，创建并启动 B-only Instance `agon:1:24`，B Attach 成功；A 成功进入 `SPECTATING` 并以 B 为跟随目标。
+- 已执行 `ExitSpectator(A, "wp10_patch4_hud_restore")`，服务端返回 `WP10_PATCH4_SPECTATOR_EXIT:true:nil`。服务端只能确认退出接线成功，建造栏是否由客户端重新显示/可用仍需维护者在 A 客户端确认；在确认前不将该修补标记为最终通过。

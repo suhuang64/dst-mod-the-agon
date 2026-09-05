@@ -802,13 +802,16 @@ local function CreateEcho(self, echo_id, player, session)
             return nil, SpectatorService.ERROR_CODES.ECHO_CREATE_FAILED
         end
     end
-    if echo.Transform ~= nil and type(echo.Transform.SetPosition) == "function" then
+    local echo_position = session.lobby_return_position or session.anchor.world
+    if echo.Transform ~= nil
+        and type(echo.Transform.SetPosition) == "function"
+        and type(echo_position) == "table" then
         local ok = ProtectedCall(
             echo.Transform.SetPosition,
             echo.Transform,
-            session.anchor.world.x,
-            session.anchor.world.y or 0,
-            session.anchor.world.z
+            echo_position.x,
+            echo_position.y or 0,
+            echo_position.z
         )
         if not ok then
             return nil, SpectatorService.ERROR_CODES.ECHO_CREATE_FAILED
